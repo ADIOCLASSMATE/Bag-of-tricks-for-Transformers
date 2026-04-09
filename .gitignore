@@ -1,5 +1,6 @@
 .claude
 .codex
+.sii
 nanogpt-speedrun
 parameter-golf
 slowrun
@@ -23,3 +24,4 @@ data/docs_selected.jsonl
 logs/
 final_model*.pt
 final_model*.ptz
+.cache

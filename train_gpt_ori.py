@@ -1,5 +1,7 @@
 """
-Hard stop: To keep readable for newcomers, let's make sure the core trainer scripts never are longer than 1500 lines.
+The `train_gpt.py` and `train_gpt_mlx.py` scripts are intended as good launching-off points for new participants, not SOTA configs. We'll accept PRs that tune, improve, or simplify these scripts without significantly increasing complexity, but competitive submissions should stay in the `/records` folder.
+
+Hard stop: To keep readable for newcomers, let's make sure `train_gpt.py` and `train_gpt_mlx.py` never are longer than 1500 lines.
 """
 
 from __future__ import annotations
@@ -41,7 +43,6 @@ class Hyperparameters:
     val_files = os.path.join(data_path, "fineweb_val_*.bin")
     tokenizer_path = os.environ.get("TOKENIZER_PATH", "./data/tokenizers/fineweb_1024_bpe.model")
     run_id = os.environ.get("RUN_ID", str(uuid.uuid4()))
-    output_dir = os.environ.get("OUTPUT_DIR", "logs")
     seed = int(os.environ.get("SEED", 1337))
 
     # Validation cadence and batch size. Validation always uses the full fineweb_val split.
@@ -84,26 +85,6 @@ class Hyperparameters:
     beta2 = float(os.environ.get("BETA2", 0.95))
     adam_eps = float(os.environ.get("ADAM_EPS", 1e-8))
     grad_clip_norm = float(os.environ.get("GRAD_CLIP_NORM", 0.0))
-
-    # Optional W&B logging.
-    enable_wandb = bool(int(os.environ.get("ENABLE_WANDB", "1")))
-    wandb_project = os.environ.get("WANDB_PROJECT", "parameter-golf")
-    wandb_entity = os.environ.get("WANDB_ENTITY")
-    wandb_run_name = os.environ.get("WANDB_RUN_NAME", run_id)
-    wandb_group = os.environ.get("WANDB_GROUP")
-    wandb_tags = [tag.strip() for tag in os.environ.get("WANDB_TAGS", "").split(",") if tag.strip()]
-    wandb_notes = os.environ.get("WANDB_NOTES")
-    wandb_mode = os.environ.get("WANDB_MODE", "offline")
-    wandb_dir = os.environ.get("WANDB_DIR")
-    wandb_upload_artifacts = bool(int(os.environ.get("WANDB_UPLOAD_ARTIFACTS", "0")))
-
-
-def hyperparameters_to_dict(args: Hyperparameters) -> dict[str, object]:
-    return {
-        key: getattr(args, key)
-        for key, value in type(args).__dict__.items()
-        if not key.startswith("_") and not callable(value)
-    }
 
 # -----------------------------
 # MUON OPTIMIZER 
@@ -789,8 +770,8 @@ def main() -> None:
 
     logfile = None
     if master_process:
-        os.makedirs(args.output_dir, exist_ok=True)
-        logfile = os.path.join(args.output_dir, f"{args.run_id}.txt")
+        os.makedirs("logs", exist_ok=True)
+        logfile = f"logs/{args.run_id}.txt"
         print(logfile)
 
     def log0(msg: str, console: bool = True) -> None:
@@ -801,17 +782,6 @@ def main() -> None:
         if logfile is not None:
             with open(logfile, "a", encoding="utf-8") as f:
                 print(msg, file=f)
-
-    wandb = None
-    wandb_run = None
-
-    def wandb_log(metrics: dict[str, object], *, step: int | None = None) -> None:
-        if wandb_run is None:
-            return
-        if step is None:
-            wandb_run.log(metrics)
-        else:
-            wandb_run.log(metrics, step=step)
 
     log0(code, console=False)
     log0("=" * 100, console=False)
@@ -913,7 +883,6 @@ def main() -> None:
         fused=True,
     )
     optimizers: list[torch.optim.Optimizer] = [optimizer_tok, optimizer_muon, optimizer_scalar]
-    optimizer_head: torch.optim.Optimizer | None = None
     if base_model.lm_head is not None:
         optimizer_head = torch.optim.Adam(
             [{"params": [base_model.lm_head.weight], "lr": args.head_lr, "base_lr": args.head_lr}],
@@ -939,52 +908,6 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
-
-    if master_process and args.enable_wandb and args.wandb_mode != "disabled":
-        try:
-            import wandb  # type: ignore
-        except ImportError as exc:
-            raise ImportError(
-                "ENABLE_WANDB=1 but wandb is not installed. Install dependencies or set ENABLE_WANDB=0."
-            ) from exc
-        wandb_init_kwargs: dict[str, object] = {
-            "project": args.wandb_project,
-            "name": args.wandb_run_name,
-            "mode": args.wandb_mode,
-            "config": {
-                **hyperparameters_to_dict(args),
-                "script_name": Path(__file__).name,
-                "dataset_dir_name": dataset_dir.name,
-                "actual_train_files": actual_train_files,
-                "world_size": world_size,
-                "grad_accum_steps": grad_accum_steps,
-                "device_type": device.type,
-                "torch_version": torch.__version__,
-                "python_version": sys.version.split()[0],
-                "model_params": int(n_params),
-            },
-            "tags": args.wandb_tags,
-            "reinit": False,
-        }
-        if args.wandb_entity:
-            wandb_init_kwargs["entity"] = args.wandb_entity
-        if args.wandb_group:
-            wandb_init_kwargs["group"] = args.wandb_group
-        if args.wandb_notes:
-            wandb_init_kwargs["notes"] = args.wandb_notes
-        if args.wandb_dir:
-            wandb_init_kwargs["dir"] = args.wandb_dir
-        wandb_run = wandb.init(**wandb_init_kwargs)
-        wandb_log(
-            {
-                "setup/model_params": int(n_params),
-                "setup/world_size": world_size,
-                "setup/grad_accum_steps": grad_accum_steps,
-                "setup/train_shards": actual_train_files,
-                "setup/val_tokens": int(val_tokens.numel() - 1),
-            },
-            step=0,
-        )
 
     # -----------------------------
     # DATA LOADER & MODEL WARMUP
@@ -1070,15 +993,6 @@ def main() -> None:
                 f"step:{step}/{args.iterations} val_loss:{val_loss:.4f} val_bpb:{val_bpb:.4f} "
                 f"train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms / max(step, 1):.2f}ms"
             )
-            wandb_log(
-                {
-                    "val/loss": float(val_loss),
-                    "val/bpb": float(val_bpb),
-                    "train/time_ms": float(training_time_ms),
-                    "train/step_avg_ms": float(training_time_ms / max(step, 1)),
-                },
-                step=step,
-            )
             torch.cuda.synchronize()
             t0 = time.perf_counter()
 
@@ -1130,21 +1044,6 @@ def main() -> None:
                 f"step:{step}/{args.iterations} train_loss:{train_loss.item():.4f} "
                 f"train_time:{approx_training_time_ms:.0f}ms step_avg:{approx_training_time_ms / step:.2f}ms"
             )
-            wandb_log(
-                {
-                    "train/loss": float(train_loss.item()),
-                    "train/time_ms": float(approx_training_time_ms),
-                    "train/step_avg_ms": float(approx_training_time_ms / step),
-                    "train/lr_scale": float(scale),
-                    "train/muon_momentum": float(muon_momentum),
-                    "train/lr_tok": float(optimizer_tok.param_groups[0]["lr"]),
-                    "train/lr_head": float(optimizer_head.param_groups[0]["lr"]) if optimizer_head is not None else 0.0,
-                    "train/lr_matrix": float(optimizer_muon.param_groups[0]["lr"]),
-                    "train/lr_scalar": float(optimizer_scalar.param_groups[0]["lr"]),
-                    "train/tokens_seen": int(step * args.train_batch_tokens),
-                },
-                step=step,
-            )
 
         # Needed to sync whether we've reached the wallclock cap.
         reached_cap = max_wallclock_ms is not None and approx_training_time_ms >= max_wallclock_ms
@@ -1155,49 +1054,52 @@ def main() -> None:
         if stop_after_step is None and reached_cap:
             stop_after_step = step
 
-    peak_mem_allocated_mib = torch.cuda.max_memory_allocated() // 1024 // 1024
-    peak_mem_reserved_mib = torch.cuda.max_memory_reserved() // 1024 // 1024
     log0(
-        f"peak memory allocated: {peak_mem_allocated_mib} MiB "
-        f"reserved: {peak_mem_reserved_mib} MiB"
-    )
-    wandb_log(
-        {
-            "system/peak_mem_allocated_mib": int(peak_mem_allocated_mib),
-            "system/peak_mem_reserved_mib": int(peak_mem_reserved_mib),
-            "final/stopped_early": bool(stop_after_step is not None and step < args.iterations),
-            "final/step": int(step),
-        },
-        step=step,
+        f"peak memory allocated: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB "
+        f"reserved: {torch.cuda.max_memory_reserved() // 1024 // 1024} MiB"
     )
 
     # -----------------------------
-    # SERIALIZATION + FINAL EVALUATION
+    # SERIALIZATION + ROUNDTRIP VALIDATION
     # -----------------------------
-    # Save the raw bf16 model, then evaluate directly without quantization.
+    # Save the raw state (useful for debugging/loading in PyTorch directly), then always produce
+    # the compressed int8+zlib artifact and validate the round-tripped weights.
 
     if master_process:
-        model_path = os.path.join(args.output_dir, "final_model.pt")
-        torch.save(base_model.state_dict(), model_path)
-        model_bytes = os.path.getsize(model_path)
+        torch.save(base_model.state_dict(), "final_model.pt")
+        model_bytes = os.path.getsize("final_model.pt")
         code_bytes = len(code.encode("utf-8"))
         log0(f"Serialized model: {model_bytes} bytes")
         log0(f"Code size: {code_bytes} bytes")
         log0(f"Total submission size: {model_bytes + code_bytes} bytes")
-        wandb_log(
-            {
-                "artifact/model_bytes": int(model_bytes),
-                "artifact/code_bytes": int(code_bytes),
-                "artifact/submission_bytes_raw": int(model_bytes + code_bytes),
-            },
-            step=step,
+
+    quant_obj, quant_stats = quantize_state_dict_int8(base_model.state_dict())
+    quant_buf = io.BytesIO()
+    torch.save(quant_obj, quant_buf)
+    quant_raw = quant_buf.getvalue()
+    quant_blob = zlib.compress(quant_raw, level=9)
+    quant_raw_bytes = len(quant_raw)
+    if master_process:
+        with open("final_model.int8.ptz", "wb") as f:
+            f.write(quant_blob)
+        quant_file_bytes = os.path.getsize("final_model.int8.ptz")
+        code_bytes = len(code.encode("utf-8"))
+        ratio = quant_stats["baseline_tensor_bytes"] / max(quant_stats["int8_payload_bytes"], 1)
+        log0(
+            f"Serialized model int8+zlib: {quant_file_bytes} bytes "
+            f"(payload:{quant_stats['int8_payload_bytes']} raw_torch:{quant_raw_bytes} payload_ratio:{ratio:.2f}x)"
         )
+        log0(f"Total submission size int8+zlib: {quant_file_bytes + code_bytes} bytes")
 
     if distributed:
         dist.barrier()
+    with open("final_model.int8.ptz", "rb") as f:
+        quant_blob_disk = f.read()
+    quant_state = torch.load(io.BytesIO(zlib.decompress(quant_blob_disk)), map_location="cpu")
+    base_model.load_state_dict(dequantize_state_dict_int8(quant_state), strict=True)
     torch.cuda.synchronize()
-    t_feval = time.perf_counter()
-    final_val_loss, final_val_bpb = eval_val(
+    t_qeval = time.perf_counter()
+    q_val_loss, q_val_bpb = eval_val(
         args,
         model,
         rank,
@@ -1210,27 +1112,11 @@ def main() -> None:
         is_boundary_token_lut,
     )
     torch.cuda.synchronize()
-    final_eval_time_ms = 1000.0 * (time.perf_counter() - t_feval)
     log0(
-        f"final val_loss:{final_val_loss:.4f} val_bpb:{final_val_bpb:.4f} "
-        f"eval_time:{final_eval_time_ms:.0f}ms"
+        f"final_int8_zlib_roundtrip val_loss:{q_val_loss:.4f} val_bpb:{q_val_bpb:.4f} "
+        f"eval_time:{1000.0 * (time.perf_counter() - t_qeval):.0f}ms"
     )
-    log0(f"final_exact val_loss:{final_val_loss:.8f} val_bpb:{final_val_bpb:.8f}")
-    wandb_log(
-        {
-            "final/val_loss": float(final_val_loss),
-            "final/val_bpb": float(final_val_bpb),
-            "final/eval_time_ms": float(final_eval_time_ms),
-        },
-        step=step,
-    )
-    if wandb_run is not None:
-        wandb_run.summary["val_loss"] = float(final_val_loss)
-        wandb_run.summary["val_bpb"] = float(final_val_bpb)
-        wandb_run.summary["train_steps"] = int(step)
-        wandb_run.summary["peak_mem_allocated_mib"] = int(peak_mem_allocated_mib)
-        wandb_run.summary["peak_mem_reserved_mib"] = int(peak_mem_reserved_mib)
-        wandb_run.finish()
+    log0(f"final_int8_zlib_roundtrip_exact val_loss:{q_val_loss:.8f} val_bpb:{q_val_bpb:.8f}")
 
     if distributed:
         dist.destroy_process_group()

@@ -3,7 +3,7 @@ requires = ["setuptools>=70.2.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bag_of_tricks_for_transformers"
+name = "bag-of-tricks-for-transformers"
 version = "0.1.0"
 description = "Training and data preparation scripts for the parameter-golf project."
 license = { file = "LICENSE" }

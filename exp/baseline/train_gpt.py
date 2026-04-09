@@ -1,6 +1,4 @@
 """
-The `train_gpt.py`, `train_gpt_wandb.py`, and `train_gpt_mlx.py` scripts are intended as good launching-off points for new participants, not SOTA configs. We'll accept PRs that tune, improve, or simplify these scripts without significantly increasing complexity, but competitive submissions should stay in the `/records` folder.
-
 Hard stop: To keep readable for newcomers, let's make sure the core trainer scripts never are longer than 1500 lines.
 """
 
@@ -43,6 +41,7 @@ class Hyperparameters:
     val_files = os.path.join(data_path, "fineweb_val_*.bin")
     tokenizer_path = os.environ.get("TOKENIZER_PATH", "./data/tokenizers/fineweb_1024_bpe.model")
     run_id = os.environ.get("RUN_ID", str(uuid.uuid4()))
+    output_dir = os.environ.get("OUTPUT_DIR", "logs")
     seed = int(os.environ.get("SEED", 1337))
 
     # Validation cadence and batch size. Validation always uses the full fineweb_val split.
@@ -87,7 +86,7 @@ class Hyperparameters:
     grad_clip_norm = float(os.environ.get("GRAD_CLIP_NORM", 0.0))
 
     # Optional W&B logging.
-    enable_wandb = bool(int(os.environ.get("ENABLE_WANDB", "0")))
+    enable_wandb = bool(int(os.environ.get("ENABLE_WANDB", "1")))
     wandb_project = os.environ.get("WANDB_PROJECT", "parameter-golf")
     wandb_entity = os.environ.get("WANDB_ENTITY")
     wandb_run_name = os.environ.get("WANDB_RUN_NAME", run_id)
@@ -790,8 +789,8 @@ def main() -> None:
 
     logfile = None
     if master_process:
-        os.makedirs("logs", exist_ok=True)
-        logfile = f"logs/{args.run_id}.txt"
+        os.makedirs(args.output_dir, exist_ok=True)
+        logfile = os.path.join(args.output_dir, f"{args.run_id}.txt")
         print(logfile)
 
     def log0(msg: str, console: bool = True) -> None:
@@ -1173,14 +1172,14 @@ def main() -> None:
     )
 
     # -----------------------------
-    # SERIALIZATION + ROUNDTRIP VALIDATION
+    # SERIALIZATION + FINAL EVALUATION
     # -----------------------------
-    # Save the raw state (useful for debugging/loading in PyTorch directly), then always produce
-    # the compressed int8+zlib artifact and validate the round-tripped weights.
+    # Save the raw bf16 model, then evaluate directly without quantization.
 
     if master_process:
-        torch.save(base_model.state_dict(), "final_model.pt")
-        model_bytes = os.path.getsize("final_model.pt")
+        model_path = os.path.join(args.output_dir, "final_model.pt")
+        torch.save(base_model.state_dict(), model_path)
+        model_bytes = os.path.getsize(model_path)
         code_bytes = len(code.encode("utf-8"))
         log0(f"Serialized model: {model_bytes} bytes")
         log0(f"Code size: {code_bytes} bytes")
@@ -1194,49 +1193,11 @@ def main() -> None:
             step=step,
         )
 
-    quant_obj, quant_stats = quantize_state_dict_int8(base_model.state_dict())
-    quant_buf = io.BytesIO()
-    torch.save(quant_obj, quant_buf)
-    quant_raw = quant_buf.getvalue()
-    quant_blob = zlib.compress(quant_raw, level=9)
-    quant_raw_bytes = len(quant_raw)
-    if master_process:
-        with open("final_model.int8.ptz", "wb") as f:
-            f.write(quant_blob)
-        quant_file_bytes = os.path.getsize("final_model.int8.ptz")
-        code_bytes = len(code.encode("utf-8"))
-        ratio = quant_stats["baseline_tensor_bytes"] / max(quant_stats["int8_payload_bytes"], 1)
-        log0(
-            f"Serialized model int8+zlib: {quant_file_bytes} bytes "
-            f"(payload:{quant_stats['int8_payload_bytes']} raw_torch:{quant_raw_bytes} payload_ratio:{ratio:.2f}x)"
-        )
-        log0(f"Total submission size int8+zlib: {quant_file_bytes + code_bytes} bytes")
-        wandb_log(
-            {
-                "artifact/int8_payload_bytes": int(quant_stats["int8_payload_bytes"]),
-                "artifact/int8_raw_torch_bytes": int(quant_raw_bytes),
-                "artifact/int8_zlib_bytes": int(quant_file_bytes),
-                "artifact/submission_bytes_int8_zlib": int(quant_file_bytes + code_bytes),
-                "artifact/payload_ratio": float(ratio),
-            },
-            step=step,
-        )
-        if args.wandb_upload_artifacts and wandb_run is not None:
-            artifact = wandb.Artifact(f"{args.run_id}-submission", type="model")
-            artifact.add_file("final_model.int8.ptz")
-            if logfile is not None and os.path.exists(logfile):
-                artifact.add_file(logfile)
-            wandb_run.log_artifact(artifact)
-
     if distributed:
         dist.barrier()
-    with open("final_model.int8.ptz", "rb") as f:
-        quant_blob_disk = f.read()
-    quant_state = torch.load(io.BytesIO(zlib.decompress(quant_blob_disk)), map_location="cpu")
-    base_model.load_state_dict(dequantize_state_dict_int8(quant_state), strict=True)
     torch.cuda.synchronize()
-    t_qeval = time.perf_counter()
-    q_val_loss, q_val_bpb = eval_val(
+    t_feval = time.perf_counter()
+    final_val_loss, final_val_bpb = eval_val(
         args,
         model,
         rank,
@@ -1249,23 +1210,23 @@ def main() -> None:
         is_boundary_token_lut,
     )
     torch.cuda.synchronize()
-    q_eval_time_ms = 1000.0 * (time.perf_counter() - t_qeval)
+    final_eval_time_ms = 1000.0 * (time.perf_counter() - t_feval)
     log0(
-        f"final_int8_zlib_roundtrip val_loss:{q_val_loss:.4f} val_bpb:{q_val_bpb:.4f} "
-        f"eval_time:{q_eval_time_ms:.0f}ms"
+        f"final val_loss:{final_val_loss:.4f} val_bpb:{final_val_bpb:.4f} "
+        f"eval_time:{final_eval_time_ms:.0f}ms"
     )
-    log0(f"final_int8_zlib_roundtrip_exact val_loss:{q_val_loss:.8f} val_bpb:{q_val_bpb:.8f}")
+    log0(f"final_exact val_loss:{final_val_loss:.8f} val_bpb:{final_val_bpb:.8f}")
     wandb_log(
         {
-            "final/roundtrip_val_loss": float(q_val_loss),
-            "final/roundtrip_val_bpb": float(q_val_bpb),
-            "final/roundtrip_eval_time_ms": float(q_eval_time_ms),
+            "final/val_loss": float(final_val_loss),
+            "final/val_bpb": float(final_val_bpb),
+            "final/eval_time_ms": float(final_eval_time_ms),
         },
         step=step,
     )
     if wandb_run is not None:
-        wandb_run.summary["val_loss"] = float(q_val_loss)
-        wandb_run.summary["val_bpb"] = float(q_val_bpb)
+        wandb_run.summary["val_loss"] = float(final_val_loss)
+        wandb_run.summary["val_bpb"] = float(final_val_bpb)
         wandb_run.summary["train_steps"] = int(step)
         wandb_run.summary["peak_mem_allocated_mib"] = int(peak_mem_allocated_mib)
         wandb_run.summary["peak_mem_reserved_mib"] = int(peak_mem_reserved_mib)
