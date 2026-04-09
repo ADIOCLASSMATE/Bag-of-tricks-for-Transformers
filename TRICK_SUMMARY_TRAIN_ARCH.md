@@ -1,5 +1,7 @@
 # 三个比赛的训练侧 / 模型架构侧 Trick 汇总
 
+> **GitHub Repo**: <https://github.com/ADIOCLASSMATE/Bag-of-tricks-for-Transformers>
+
 整理范围：
 - 比赛：`nanogpt-speedrun`、`parameter-golf`、`slowrun`
 - 仅保留：**训练侧（training-side）**、**模型架构侧（architecture-side）**
@@ -9,7 +11,7 @@
 
 ## 汇总表
 
-| Trick | 类别 | 比赛来源 | 具体 record/method | 备注 |
+| Method | Category | Source | Record | Description |
 |---|---|---|---|---|
 | Muon family | 优化器 | nanogpt-speedrun, parameter-golf | nanogpt `2024-10-10_Muon`, `2024-10-17_DistributedMuon`, `2025-09-23_MuonCustomSizing`, `2025-09-29_PolarExpress`, `2025-09-30_CustomBatching`; parameter-golf `T05`, `T12`, `T14`, `T15` | 围绕 Muon 本体或其 Newton-Schulz 更新路径做改造，包括分布式化、动量调度、并行更新与参数分组/参数 bank。 |
 | SOAP | 优化器 | nanogpt-speedrun | `track_1_short / 2024-10-09_SOAP` | 直接把 baseline optimizer 从 AdamW 切换为 SOAP，是 short track 中独立提取的优化器替换项。 |

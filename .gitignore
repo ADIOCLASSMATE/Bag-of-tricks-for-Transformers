@@ -21,7 +21,6 @@ data/docs_selected.jsonl
 .vscode/
 .venv
 .venv-fa3/
-logs/
 final_model*.pt
 final_model*.ptz
 .cache
