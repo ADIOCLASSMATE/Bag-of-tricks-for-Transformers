@@ -55,3 +55,9 @@
 | AdamSyncGradientHook | 工程 | nanogpt-speedrun | `track_1_short / 2025-10-31_AdamSyncGradientHook` | 把 DistAdam 的梯度同步前移到 backward hooks，减少显式同步阶段的组织开销。 |
 | 8192BPE | 词表/Tokenizer | parameter-golf | `A11 8192BPE` | 换用 8192-token 的独立 BPE 词表，是 tokenizer 层面的容量/压缩重分配。 |
 | FactoredEmbedding | 结构 | parameter-golf | `A12 FactoredEmbedding` | 用低维 bottleneck 投影实现 factorized embedding，在词表侧节省参数后再回投到模型维度。 |
+| SandwichNorm | 结构 | Gemma4 | `exp/sandwich-norm` | 在 attention 和 MLP 输出后各加一个 post-norm (RMSNorm)，形成 pre+post 的 sandwich norm 结构（4 norm/层）。Gemma4 标志性设计，约束每层输出幅值，有助于深层训练稳定性。 |
+| HybridSlidingWindow | 结构 | Gemma4 | `exp/hybrid-sliding-window` | 每 N 层交替使用滑动窗口注意力和全局注意力（默认 3:1），大幅减少 attention 计算量（滑动层 O(n×w) vs O(n²)），同时通过周期性全局层维持长程信息。 |
+| PerLayerResidualInput | 结构 | Gemma4 | `exp/per-layer-residual-input` | 额外维护一个低维 (128 vs 512) 的 per-layer embedding 流，在每层 MLP 后通过 ReLU 门控机制重新注入 token 身份信息。创造了"第二残差流"，让 token 身份在每层独立刷新。 |
+| DualRoPE | 结构 | Gemma4 | `exp/dual-rope` | 不同层类型使用不同 RoPE 配置：滑动层用标准 RoPE (theta=10k, 全维度旋转)，全局层用 Proportional RoPE (theta=1M, 仅 25% 维度旋转)。全局层大 theta 提供更长有效上下文，部分旋转保留更多语义表达维度。 |
+| KVSharing + DoubleWideMLP | 结构/参数效率 | Gemma4 | `exp/kv-sharing-dwide-mlp` | 最后 N 层共享前面层的 KV 投影权重（省参数），同时将这些层的 MLP 宽度翻倍以平衡参数预算。在参数预算固定下通过重分配提升容量。 |
+| GeGLU | 结构 | Gemma4 | `exp/geglu` | 将 ReLU² MLP 替换为 GeGLU (Gated GeLU with tanh approximation)：`down_proj(gelu(gate_proj(x)) * up_proj(x))`。Gemma4 选择 GeGLU 而非 SwiGLU。 |

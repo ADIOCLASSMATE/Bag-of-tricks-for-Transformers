@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "trainer_path": "exp/baseline-sp1024/train_gpt.py",
+  "trainer_path": "exp/kv-sharing-dwide-mlp/train_gpt.py",
   "launcher": {
     "nproc_per_node": 8,
     "master_port_base": 29500
@@ -20,12 +20,14 @@
     "model_dim": 512,
     "num_heads": 8,
     "num_kv_heads": 4,
-    "mlp_mult": 2
+    "mlp_mult": 2,
+    "num_kv_shared_layers": 2,
+    "use_double_wide_mlp": 1
   },
   "experiments": [
     {
-      "name": "baseline-sp1024-fixed_time_10min",
-      "trainer_path": "exp/baseline-sp1024/train_gpt.py",
+      "name": "kv-sharing-dwide-mlp-fixed_time_10min",
+      "trainer_path": "exp/kv-sharing-dwide-mlp/train_gpt.py",
       "control": {
         "mode": "fixed_compute",
         "target_wallclock_seconds": 600,
@@ -33,8 +35,8 @@
       }
     },
     {
-      "name": "baseline-sp1024-fixed_tokens_10b",
-      "trainer_path": "exp/baseline-sp1024/train_gpt.py",
+      "name": "kv-sharing-dwide-mlp-fixed_tokens_10b",
+      "trainer_path": "exp/kv-sharing-dwide-mlp/train_gpt.py",
       "control": {
         "mode": "fixed_tokens",
         "target_train_tokens": 10000000000

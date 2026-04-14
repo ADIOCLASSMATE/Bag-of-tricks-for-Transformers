@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "trainer_path": "exp/baseline-sp1024/train_gpt.py",
+  "trainer_path": "exp/geglu/train_gpt.py",
   "launcher": {
     "nproc_per_node": 8,
     "master_port_base": 29500
@@ -24,8 +24,8 @@
   },
   "experiments": [
     {
-      "name": "baseline-sp1024-fixed_time_10min",
-      "trainer_path": "exp/baseline-sp1024/train_gpt.py",
+      "name": "geglu-fixed_time_10min",
+      "trainer_path": "exp/geglu/train_gpt.py",
       "control": {
         "mode": "fixed_compute",
         "target_wallclock_seconds": 600,
@@ -33,8 +33,8 @@
       }
     },
     {
-      "name": "baseline-sp1024-fixed_tokens_10b",
-      "trainer_path": "exp/baseline-sp1024/train_gpt.py",
+      "name": "geglu-fixed_tokens_10b",
+      "trainer_path": "exp/geglu/train_gpt.py",
       "control": {
         "mode": "fixed_tokens",
         "target_train_tokens": 10000000000

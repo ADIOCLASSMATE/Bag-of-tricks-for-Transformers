@@ -59,6 +59,15 @@ ENV_KEY_MAP = {
     "wandb_mode": "WANDB_MODE",
     "wandb_dir": "WANDB_DIR",
     "wandb_upload_artifacts": "WANDB_UPLOAD_ARTIFACTS",
+    # Trick-specific hyperparameters
+    "sliding_window_pattern": "SLIDING_WINDOW_PATTERN",
+    "sliding_window_size": "SLIDING_WINDOW_SIZE",
+    "global_rope_theta": "GLOBAL_ROPE_THETA",
+    "partial_rotary_factor": "PARTIAL_ROTARY_FACTOR",
+    "per_layer_embed_dim": "PER_LAYER_EMBED_DIM",
+    "per_layer_embed_scale": "PER_LAYER_EMBED_SCALE",
+    "num_kv_shared_layers": "NUM_KV_SHARED_LAYERS",
+    "use_double_wide_mlp": "USE_DOUBLE_WIDE_MLP",
 }
 
 MODEL_KEYS = ("num_layers", "model_dim", "num_heads", "num_kv_heads", "mlp_mult", "vocab_size")
@@ -329,8 +338,6 @@ def build_run_config(
     master_port = master_port_base + experiment_index
 
     command = [
-        "uv",
-        "run",
         "torchrun",
         "--standalone",
         f"--nproc_per_node={nproc_per_node}",
