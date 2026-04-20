@@ -572,12 +572,14 @@ class Rotary(nn.Module):
             self._cos_cached = freqs.cos()[None, None, :, :]
             self._sin_cached = freqs.sin()[None, None, :, :]
             self._seq_len_cached = seq_len
-        return self._cos_cached.to(dtype=dtype), self._sin_cached.to(dtype=dtype)
+        # .clone() required: .to(dtype) returns a view that PyTorch 2.8 marks as
+        # inference tensor, which cannot be saved for backward in autograd
+        return self._cos_cached.to(dtype=dtype).clone(), self._sin_cached.to(dtype=dtype).clone()
 
 
 def apply_rotary_emb(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
     half = x.size(-1) // 2
-    x1, x2 = x[..., :half], x[..., half:]
+    x1, x2 = x[..., :half].clone(), x[..., half:].clone()
     return torch.cat((x1 * cos + x2 * sin, x1 * (-sin) + x2 * cos), dim=-1)
 
 
