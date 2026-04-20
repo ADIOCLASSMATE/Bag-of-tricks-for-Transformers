@@ -1,8 +1,8 @@
 """
 Hard stop: To keep readable for newcomers, let's make sure the core trainer scripts never are longer than 1500 lines.
 
-trick: per-layer-residual-input — Second low-dimensional embedding stream re-injected at every layer.
-Inspired by Gemma4's embed_tokens_per_layer gated injection mechanism.
+trick: geGLU — Replace ReLU^2 MLP with GeGLU (Gated GeLU with tanh approximation).
+Inspired by Gemma4 which uses gelu_pytorch_tanh in its gated MLP.
 """
 
 from __future__ import annotations
@@ -74,10 +74,9 @@ class Hyperparameters:
     mlp_mult = int(os.environ.get("MLP_MULT", 2))
     tie_embeddings = bool(int(os.environ.get("TIE_EMBEDDINGS", "1")))
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
+    # trick: partial-rope — rotate only first rope_dims of head; 0 => full RoPE (baseline)
+    rope_dims = int(os.environ.get("ROPE_DIMS", 0))
     logit_softcap = float(os.environ.get("LOGIT_SOFTCAP", 30.0))
-    # trick: per-layer-residual-input
-    per_layer_embed_dim = int(os.environ.get("PER_LAYER_EMBED_DIM", 128))
-    per_layer_embed_scale = float(os.environ.get("PER_LAYER_EMBED_SCALE", 2**-0.5))
 
     # Optimizer hyperparameters.
     embed_lr = float(os.environ.get("EMBED_LR", 0.6))
@@ -318,7 +317,7 @@ CONTROL_TENSOR_NAME_PATTERNS = tuple(
     pattern
     for pattern in os.environ.get(
         "CONTROL_TENSOR_NAME_PATTERNS",
-        "attn_scale,attn_scales,mlp_scale,mlp_scales,resid_mix,resid_mixes,q_gain,skip_weight,skip_weights,per_layer_norm",
+        "attn_scale,attn_scales,mlp_scale,mlp_scales,resid_mix,resid_mixes,q_gain,skip_weight,skip_weights",
     ).split(",")
     if pattern
 )
@@ -552,9 +551,14 @@ def restore_low_dim_params_to_fp32(module: nn.Module) -> None:
 
 class Rotary(nn.Module):
     # Caches cos/sin tables per sequence length on the current device.
-    def __init__(self, dim: int, base: float = 10000.0):
+    def __init__(self, dim: int, base: float = 10000.0, rope_dims: int = 0):
         super().__init__()
-        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+        # trick: partial-rope — cache sized by rope_dims when > 0 (defaults to full head dim)
+        rd = rope_dims if 0 < rope_dims <= dim else dim
+        if rd % 2 != 0:
+            raise ValueError(f"rope_dims must be even, got {rd}")
+        self.rope_dims = rd
+        inv_freq = 1.0 / (base ** (torch.arange(0, rd, 2, dtype=torch.float32) / rd))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self._seq_len_cached = 0
         self._cos_cached: Tensor | None = None
@@ -578,6 +582,14 @@ class Rotary(nn.Module):
 
 
 def apply_rotary_emb(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
+    # trick: partial-rope — when cos covers fewer dims than x, rotate the leading segment and pass the rest through
+    rd = cos.size(-1) * 2
+    if rd < x.size(-1):
+        x_rope, x_pass = x[..., :rd], x[..., rd:]
+        half = rd // 2
+        x1, x2 = x_rope[..., :half], x_rope[..., half:]
+        x_rope = torch.cat((x1 * cos + x2 * sin, x1 * (-sin) + x2 * cos), dim=-1)
+        return torch.cat((x_rope, x_pass), dim=-1)
     half = x.size(-1) // 2
     x1, x2 = x[..., :half].clone(), x[..., half:].clone()
     return torch.cat((x1 * cos + x2 * sin, x1 * (-sin) + x2 * cos), dim=-1)
@@ -591,6 +603,7 @@ class CausalSelfAttention(nn.Module):
         num_kv_heads: int,
         rope_base: float,
         qk_gain_init: float,
+        rope_dims: int = 0,  # trick: partial-rope — 0 => full RoPE (baseline behavior)
     ):
         super().__init__()
         if dim % num_heads != 0:
@@ -609,7 +622,8 @@ class CausalSelfAttention(nn.Module):
         self.proj = CastedLinear(dim, dim, bias=False)
         self.proj._zero_init = True
         self.q_gain = nn.Parameter(torch.full((num_heads,), qk_gain_init, dtype=torch.float32))
-        self.rotary = Rotary(self.head_dim, base=rope_base)
+        # trick: partial-rope — thread rope_dims into Rotary's cache size
+        self.rotary = Rotary(self.head_dim, base=rope_base, rope_dims=rope_dims)
 
     def forward(self, x: Tensor) -> Tensor:
         bsz, seqlen, dim = x.shape
@@ -635,17 +649,18 @@ class CausalSelfAttention(nn.Module):
 
 
 class MLP(nn.Module):
-    # relu^2 MLP from the original modded-nanogpt setup
+    # trick: geGLU — replace relu^2 with gated GeLU (as in Gemma4)
     def __init__(self, dim: int, mlp_mult: int):
         super().__init__()
         hidden = mlp_mult * dim
-        self.fc = CastedLinear(dim, hidden, bias=False)
-        self.proj = CastedLinear(hidden, dim, bias=False)
-        self.proj._zero_init = True
+        self.gate_proj = CastedLinear(dim, hidden, bias=False)  # trick: geGLU
+        self.up_proj = CastedLinear(dim, hidden, bias=False)    # trick: geGLU
+        self.down_proj = CastedLinear(hidden, dim, bias=False)  # trick: geGLU
+        self.down_proj._zero_init = True
 
     def forward(self, x: Tensor) -> Tensor:
-        x = torch.relu(self.fc(x))
-        return self.proj(x.square())
+        # trick: geGLU — down_proj(gelu(gate_proj(x)) * up_proj(x))
+        return self.down_proj(F.gelu(self.gate_proj(x), approximate='tanh') * self.up_proj(x))
 
 
 class Block(nn.Module):
@@ -657,34 +672,25 @@ class Block(nn.Module):
         mlp_mult: int,
         rope_base: float,
         qk_gain_init: float,
-        per_layer_embed_dim: int,  # trick: per-layer-residual-input
+        rope_dims: int = 0,  # trick: partial-rope
     ):
         super().__init__()
         self.attn_norm = RMSNorm()
         self.mlp_norm = RMSNorm()
-        self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base, qk_gain_init)
+        self.attn = CausalSelfAttention(
+            dim, num_heads, num_kv_heads, rope_base, qk_gain_init, rope_dims=rope_dims
+        )
         self.mlp = MLP(dim, mlp_mult)
         self.attn_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
         self.mlp_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
         self.resid_mix = nn.Parameter(torch.stack((torch.ones(dim), torch.zeros(dim))).float())
-        # trick: per-layer-residual-input — gated per-layer injection
-        self.per_layer_gate = CastedLinear(dim, per_layer_embed_dim, bias=False)
-        self.per_layer_gate._zero_init = True
-        self.per_layer_projection = CastedLinear(per_layer_embed_dim, dim, bias=False)
-        self.per_layer_projection._zero_init = True
-        self.per_layer_norm = RMSNorm()
 
-    def forward(self, x: Tensor, x0: Tensor, per_layer_inputs: Tensor) -> Tensor:  # trick: per-layer-residual-input
+    def forward(self, x: Tensor, x0: Tensor) -> Tensor:
         mix = self.resid_mix.to(dtype=x.dtype)
         x = mix[0][None, None, :] * x + mix[1][None, None, :] * x0
         attn_out = self.attn(self.attn_norm(x))
         x = x + self.attn_scale.to(dtype=x.dtype)[None, None, :] * attn_out
         x = x + self.mlp_scale.to(dtype=x.dtype)[None, None, :] * self.mlp(self.mlp_norm(x))
-        # trick: per-layer-residual-input — inject token identity at each layer
-        gate = torch.relu(self.per_layer_gate(x))
-        gate = gate * per_layer_inputs
-        per_layer_out = self.per_layer_norm(self.per_layer_projection(gate))
-        x = x + per_layer_out
         return x
 
 
@@ -702,8 +708,7 @@ class GPT(nn.Module):
         logit_softcap: float,
         rope_base: float,
         qk_gain_init: float,
-        per_layer_embed_dim: int,  # trick: per-layer-residual-input
-        per_layer_embed_scale: float,  # trick: per-layer-residual-input
+        rope_dims: int = 0,  # trick: partial-rope
     ):
         super().__init__()
         if logit_softcap <= 0.0:
@@ -716,11 +721,6 @@ class GPT(nn.Module):
         self.num_decoder_layers = num_layers - self.num_encoder_layers
         self.num_skip_weights = min(self.num_encoder_layers, self.num_decoder_layers)
         self.skip_weights = nn.Parameter(torch.ones(self.num_skip_weights, model_dim, dtype=torch.float32))
-        # trick: per-layer-residual-input — second embedding stream
-        self.embed_tokens_per_layer = nn.Embedding(vocab_size, per_layer_embed_dim)
-        self.per_layer_model_projection = CastedLinear(model_dim, per_layer_embed_dim, bias=False)
-        self.per_layer_model_projection._zero_init = True
-        self.per_layer_embed_scale = per_layer_embed_scale  # trick: per-layer-residual-input
         self.blocks = nn.ModuleList(
             [
                 Block(
@@ -730,7 +730,7 @@ class GPT(nn.Module):
                     mlp_mult,
                     rope_base,
                     qk_gain_init,
-                    per_layer_embed_dim,  # trick: per-layer-residual-input
+                    rope_dims=rope_dims,  # trick: partial-rope
                 )
                 for i in range(num_layers)
             ]
@@ -744,30 +744,24 @@ class GPT(nn.Module):
     def _init_weights(self) -> None:
         if self.tie_embeddings:
             nn.init.normal_(self.tok_emb.weight, mean=0.0, std=self.tied_embed_init_std)
-        # trick: per-layer-residual-input
-        nn.init.normal_(self.embed_tokens_per_layer.weight, mean=0.0, std=self.tied_embed_init_std)
         for module in self.modules():
             if isinstance(module, nn.Linear) and getattr(module, "_zero_init", False):
                 nn.init.zeros_(module.weight)
 
     def forward(self, input_ids: Tensor, target_ids: Tensor) -> Tensor:
         x = self.tok_emb(input_ids)
-        # trick: per-layer-residual-input — compute per_layer_inputs before rms_norm
-        per_layer_embeds = self.embed_tokens_per_layer(input_ids)
-        per_layer_proj = self.per_layer_model_projection(x)
-        per_layer_inputs = (per_layer_proj + per_layer_embeds) * self.per_layer_embed_scale
         x = F.rms_norm(x, (x.size(-1),))
         x0 = x
         skips: list[Tensor] = []
 
         # First half stores skips; second half reuses them in reverse order.
         for i in range(self.num_encoder_layers):
-            x = self.blocks[i](x, x0, per_layer_inputs)  # trick: per-layer-residual-input
+            x = self.blocks[i](x, x0)
             skips.append(x)
         for i in range(self.num_decoder_layers):
             if skips:
                 x = x + self.skip_weights[i].to(dtype=x.dtype)[None, None, :] * skips.pop()
-            x = self.blocks[self.num_encoder_layers + i](x, x0, per_layer_inputs)  # trick: per-layer-residual-input
+            x = self.blocks[self.num_encoder_layers + i](x, x0)
 
         x = self.final_norm(x).reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
@@ -903,8 +897,7 @@ def main() -> None:
         logit_softcap=args.logit_softcap,
         rope_base=args.rope_base,
         qk_gain_init=args.qk_gain_init,
-        per_layer_embed_dim=args.per_layer_embed_dim,  # trick: per-layer-residual-input
-        per_layer_embed_scale=args.per_layer_embed_scale,  # trick: per-layer-residual-input
+        rope_dims=args.rope_dims,  # trick: partial-rope
     ).to(device).bfloat16()
     for module in base_model.modules():
         if isinstance(module, CastedLinear):
@@ -933,7 +926,7 @@ def main() -> None:
         scalar_params.append(base_model.skip_weights)
     token_lr = args.tied_embed_lr if args.tie_embeddings else args.embed_lr
     optimizer_tok = torch.optim.Adam(
-        [{"params": [base_model.tok_emb.weight, base_model.embed_tokens_per_layer.weight], "lr": token_lr, "base_lr": token_lr}],  # trick: per-layer-residual-input
+        [{"params": [base_model.tok_emb.weight], "lr": token_lr, "base_lr": token_lr}],
         betas=(args.beta1, args.beta2),
         eps=args.adam_eps,
         fused=True,
@@ -968,6 +961,9 @@ def main() -> None:
     log0(f"world_size:{world_size} grad_accum_steps:{grad_accum_steps}")
     log0("sdp_backends:cudnn=False flash=True mem_efficient=False math=False")
     log0(f"attention_mode:gqa num_heads:{args.num_heads} num_kv_heads:{args.num_kv_heads}")
+    # trick: partial-rope — report scope when enabled
+    if args.rope_dims > 0:
+        log0(f"partial-rope:enabled rope_dims={args.rope_dims}/{args.model_dim // args.num_heads}")
     log0(
         f"tie_embeddings:{args.tie_embeddings} embed_lr:{token_lr} "
         f"head_lr:{args.head_lr if base_model.lm_head is not None else 0.0} "
@@ -979,7 +975,7 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
-    log0(f"trick:per-layer-residual-input per_layer_embed_dim:{args.per_layer_embed_dim} per_layer_embed_scale:{args.per_layer_embed_scale}")  # trick: per-layer-residual-input
+    log0("mlp_activation:geGLU (replacing relu^2)")  # trick: geGLU
 
     if master_process and args.enable_wandb and args.wandb_mode != "disabled":
         try:

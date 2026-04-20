@@ -1,9 +1,5 @@
 """
 Hard stop: To keep readable for newcomers, let's make sure the core trainer scripts never are longer than 1500 lines.
-
-trick: dual-rope — Different RoPE configs per layer type (sliding vs global).
-Global layers use large theta with partial rotation; sliding layers use standard RoPE.
-Inspired by Gemma4's proportional RoPE design.
 """
 
 from __future__ import annotations
@@ -77,10 +73,9 @@ class Hyperparameters:
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
     logit_softcap = float(os.environ.get("LOGIT_SOFTCAP", 30.0))
 
-    # trick: dual-rope
-    sliding_window_pattern = int(os.environ.get("SLIDING_WINDOW_PATTERN", 3))
-    global_rope_theta = float(os.environ.get("GLOBAL_ROPE_THETA", 1000000.0))
-    partial_rotary_factor = float(os.environ.get("PARTIAL_ROTARY_FACTOR", 0.25))
+    # trick: hybrid-sliding-window — pattern and window size
+    sliding_window_pattern = int(os.environ.get("SLIDING_WINDOW_PATTERN", 3))  # trick: hybrid-sliding-window
+    sliding_window_size = int(os.environ.get("SLIDING_WINDOW_SIZE", 512))  # trick: hybrid-sliding-window
 
     # Optimizer hyperparameters.
     embed_lr = float(os.environ.get("EMBED_LR", 0.6))
@@ -93,6 +88,15 @@ class Hyperparameters:
     muon_backend_steps = int(os.environ.get("MUON_BACKEND_STEPS", 5))
     muon_momentum_warmup_start = float(os.environ.get("MUON_MOMENTUM_WARMUP_START", 0.85))
     muon_momentum_warmup_steps = int(os.environ.get("MUON_MOMENTUM_WARMUP_STEPS", 500))
+<<<<<<<< HEAD:exp/hybrid-sliding-window/train_gpt.py
+========
+    # trick: snoo — Sparse Nesterov Outer Optimizer (modded-nanogpt PR #128)
+    snoo_enabled = bool(int(os.environ.get("SNOO_ENABLED", "0")))
+    snoo_scope = os.environ.get("SNOO_SCOPE", "muon")
+    snoo_lr = float(os.environ.get("SNOO_LR", 0.68))
+    snoo_momentum = float(os.environ.get("SNOO_MOMENTUM", 0.37))
+    snoo_k = int(os.environ.get("SNOO_K", 28))
+>>>>>>>> 95fc86a (update gitignore):exp/snoo/train_gpt.py
     beta1 = float(os.environ.get("BETA1", 0.9))
     beta2 = float(os.environ.get("BETA2", 0.95))
     adam_eps = float(os.environ.get("ADAM_EPS", 1e-8))
@@ -200,8 +204,64 @@ class Muon(torch.optim.Optimizer):
         return loss
 
 
+# trick: snoo — Sparse Nesterov Outer Optimizer (modded-nanogpt PR #128)
+# Wraps an arbitrary set of parameters with a slow "outer" buffer. Every `k`
+# inner steps, Snoo treats the k-step displacement p_new - p_old as the (negated)
+# gradient for a Nesterov-SGD step, rewinds the parameters to p_old, lets the SGD
+# update produce the next p_new, then commits p_new into the outer buffer. This
+# smooths the training trajectory and biases towards flatter minima.
+#
+# In DDP this is implicitly consistent: p_new is identical across ranks (via
+# backward all-reduce and identical inner steps) and p_old is initialized from
+# a synced clone, so the pseudo-grad is identical on every rank and no extra
+# collective is required.
+class Snoo:
+    @torch.no_grad()
+    def __init__(self, params, lr: float, momentum: float, k: int) -> None:
+        self.params = list(params)
+        self.lr = lr
+        self.momentum = momentum
+        self.k = k
+        self.current_step = 0
+        self.outer_buf = [p.detach().clone() for p in self.params]
+        self.optimizer = torch.optim.SGD(
+            self.params,
+            lr=lr,
+            momentum=momentum,
+            nesterov=True,
+            fused=True,
+        )
+
+    @torch.no_grad()
+    def step(self) -> None:
+        if self.current_step % self.k == 0:
+            for p_new, p_old in zip(self.params, self.outer_buf):
+                p_new.grad = p_old.data - p_new.data
+                p_new.copy_(p_old, non_blocking=True)
+            self.optimizer.step()
+            for p_new, p_old in zip(self.params, self.outer_buf):
+                p_old.copy_(p_new, non_blocking=True)
+        self.current_step += 1
+
+    def zero_grad(self, set_to_none: bool = True) -> None:
+        self.optimizer.zero_grad(set_to_none=set_to_none)
+
+    def state_dict(self) -> dict:
+        return {
+            "current_step": self.current_step,
+            "outer_buf": [p.detach().clone() for p in self.outer_buf],
+            "optimizer_state_dict": self.optimizer.state_dict(),
+        }
+
+    def load_state_dict(self, state_dict: dict) -> None:
+        self.current_step = state_dict["current_step"]
+        for p_src, p_dst in zip(state_dict["outer_buf"], self.outer_buf):
+            p_dst.copy_(p_src)
+        self.optimizer.load_state_dict(state_dict["optimizer_state_dict"])
+
+
 # -----------------------------
-# TOKENIZER-AGNOSTIC EVALUATION SETUP 
+# TOKENIZER-AGNOSTIC EVALUATION SETUP
 # -----------------------------
 #
 # It's common for small models have a large fraction of their parameters be embeddings, since the 2 * d_model * d_vocab vectors can be gigantic.
@@ -225,7 +285,7 @@ def build_sentencepiece_luts(
             base_bytes_np[token_id] = 1
             continue
         piece = sp.id_to_piece(token_id)
-        if piece.startswith("▁"):
+        if piece.startswith("\u2581"):
             has_leading_space_np[token_id] = True
             piece = piece[1:]
         base_bytes_np[token_id] = len(piece.encode("utf-8"))
@@ -554,16 +614,10 @@ def restore_low_dim_params_to_fp32(module: nn.Module) -> None:
 
 
 class Rotary(nn.Module):
-    # trick: dual-rope — support proportional RoPE with partial rotation
-    def __init__(self, dim: int, base: float = 10000.0, partial_rotary_factor: float = 1.0):
+    # Caches cos/sin tables per sequence length on the current device.
+    def __init__(self, dim: int, base: float = 10000.0):
         super().__init__()
-        rope_dim = int(dim * partial_rotary_factor)
-        if rope_dim % 2 != 0:
-            rope_dim -= 1
-        self.rope_dim = rope_dim
-        self.dim = dim
-        # Normalization denominator uses FULL dim (not rope_dim) — the "proportional" part
-        inv_freq = 1.0 / (base ** (torch.arange(0, rope_dim, 2, dtype=torch.float32) / dim))
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self._seq_len_cached = 0
         self._cos_cached: Tensor | None = None
@@ -586,21 +640,10 @@ class Rotary(nn.Module):
         return self._cos_cached.to(dtype=dtype).clone(), self._sin_cached.to(dtype=dtype).clone()
 
 
-def apply_rotary_emb(x: Tensor, cos: Tensor, sin: Tensor, rope_dim: int | None = None) -> Tensor:
-    # trick: dual-rope — support partial rotation
-    # All sliced chunks use .clone() to avoid "Inference tensors cannot be saved
-    # for backward" errors under torch.compile with fullgraph=True
-    if rope_dim is None or rope_dim >= x.size(-1):
-        half = x.size(-1) // 2
-        x1, x2 = x[..., :half].clone(), x[..., half:].clone()
-        return torch.cat((x1 * cos + x2 * sin, x1 * (-sin) + x2 * cos), dim=-1)
-    # Partial: rotate first rope_dim dims, pass through the rest
-    x_rot = x[..., :rope_dim].clone()
-    x_pass = x[..., rope_dim:].clone()
-    half = rope_dim // 2
-    x1, x2 = x_rot[..., :half].clone(), x_rot[..., half:].clone()
-    x_rotated = torch.cat((x1 * cos + x2 * sin, x1 * (-sin) + x2 * cos), dim=-1)
-    return torch.cat((x_rotated, x_pass), dim=-1)
+def apply_rotary_emb(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
+    half = x.size(-1) // 2
+    x1, x2 = x[..., :half].clone(), x[..., half:].clone()
+    return torch.cat((x1 * cos + x2 * sin, x1 * (-sin) + x2 * cos), dim=-1)
 
 
 class CausalSelfAttention(nn.Module):
@@ -611,8 +654,8 @@ class CausalSelfAttention(nn.Module):
         num_kv_heads: int,
         rope_base: float,
         qk_gain_init: float,
-        rope_theta: float | None = None,  # trick: dual-rope
-        partial_rotary_factor: float = 1.0,  # trick: dual-rope
+        is_sliding: bool = False,  # trick: hybrid-sliding-window
+        sliding_window_size: int | None = None,  # trick: hybrid-sliding-window
     ):
         super().__init__()
         if dim % num_heads != 0:
@@ -631,8 +674,9 @@ class CausalSelfAttention(nn.Module):
         self.proj = CastedLinear(dim, dim, bias=False)
         self.proj._zero_init = True
         self.q_gain = nn.Parameter(torch.full((num_heads,), qk_gain_init, dtype=torch.float32))
-        actual_theta = rope_theta if rope_theta is not None else rope_base  # trick: dual-rope
-        self.rotary = Rotary(self.head_dim, base=actual_theta, partial_rotary_factor=partial_rotary_factor)  # trick: dual-rope
+        self.rotary = Rotary(self.head_dim, base=rope_base)
+        self.is_sliding = is_sliding  # trick: hybrid-sliding-window
+        self.sliding_window_size = sliding_window_size  # trick: hybrid-sliding-window
 
     def forward(self, x: Tensor) -> Tensor:
         bsz, seqlen, dim = x.shape
@@ -642,17 +686,25 @@ class CausalSelfAttention(nn.Module):
         q = F.rms_norm(q, (q.size(-1),))
         k = F.rms_norm(k, (k.size(-1),))
         cos, sin = self.rotary(seqlen, x.device, q.dtype)
-        q = apply_rotary_emb(q, cos, sin, self.rotary.rope_dim)  # trick: dual-rope
-        k = apply_rotary_emb(k, cos, sin, self.rotary.rope_dim)  # trick: dual-rope
+        q = apply_rotary_emb(q, cos, sin)
+        k = apply_rotary_emb(k, cos, sin)
         q = q * self.q_gain.to(dtype=q.dtype)[None, :, None, None]
-        y = F.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            attn_mask=None,
-            is_causal=True,
-            enable_gqa=(self.num_kv_heads != self.num_heads),
-        )
+        if self.is_sliding:  # trick: hybrid-sliding-window — manual sliding window attention since sdpa doesn't support attn_mask efficiently
+            w = self.sliding_window_size
+            n_rep = self.num_heads // self.num_kv_heads
+            k = k.unsqueeze(2).expand(-1, -1, n_rep, -1, -1).reshape(bsz, self.num_heads, seqlen, self.head_dim)
+            v = v.unsqueeze(2).expand(-1, -1, n_rep, -1, -1).reshape(bsz, self.num_heads, seqlen, self.head_dim)
+            scale = self.head_dim ** -0.5
+            scores = torch.matmul(q, k.transpose(-2, -1)) * scale
+            positions = torch.arange(seqlen, device=x.device)
+            causal_mask = positions.unsqueeze(1) >= positions.unsqueeze(0)
+            window_mask = positions.unsqueeze(1) >= (positions.unsqueeze(0) - w + 1)
+            mask = causal_mask & window_mask
+            scores = scores.masked_fill(~mask.unsqueeze(0).unsqueeze(0), float('-inf'))
+            attn = F.softmax(scores, dim=-1)
+            y = torch.matmul(attn, v)
+        else:
+            y = F.scaled_dot_product_attention(q, k, v, attn_mask=None, is_causal=True, enable_gqa=(self.num_kv_heads != self.num_heads))
         y = y.transpose(1, 2).contiguous().reshape(bsz, seqlen, dim)
         return self.proj(y)
 
@@ -680,13 +732,13 @@ class Block(nn.Module):
         mlp_mult: int,
         rope_base: float,
         qk_gain_init: float,
-        rope_theta: float | None = None,  # trick: dual-rope
-        partial_rotary_factor: float = 1.0,  # trick: dual-rope
+        is_sliding: bool = False,  # trick: hybrid-sliding-window
+        sliding_window_size: int | None = None,  # trick: hybrid-sliding-window
     ):
         super().__init__()
         self.attn_norm = RMSNorm()
         self.mlp_norm = RMSNorm()
-        self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base, qk_gain_init, rope_theta=rope_theta, partial_rotary_factor=partial_rotary_factor)  # trick: dual-rope
+        self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base, qk_gain_init, is_sliding=is_sliding, sliding_window_size=sliding_window_size)  # trick: hybrid-sliding-window
         self.mlp = MLP(dim, mlp_mult)
         self.attn_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
         self.mlp_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
@@ -715,9 +767,8 @@ class GPT(nn.Module):
         logit_softcap: float,
         rope_base: float,
         qk_gain_init: float,
-        sliding_window_pattern: int = 3,  # trick: dual-rope
-        global_rope_theta: float = 1000000.0,  # trick: dual-rope
-        partial_rotary_factor: float = 0.25,  # trick: dual-rope
+        sliding_window_pattern: int = 3,  # trick: hybrid-sliding-window
+        sliding_window_size: int = 512,  # trick: hybrid-sliding-window
     ):
         super().__init__()
         if logit_softcap <= 0.0:
@@ -730,14 +781,16 @@ class GPT(nn.Module):
         self.num_decoder_layers = num_layers - self.num_encoder_layers
         self.num_skip_weights = min(self.num_encoder_layers, self.num_decoder_layers)
         self.skip_weights = nn.Parameter(torch.ones(self.num_skip_weights, model_dim, dtype=torch.float32))
-
-        # trick: dual-rope — determine layer types
-        self.layer_types = [
-            "sliding" if (i + 1) % sliding_window_pattern != 0 else "global"
-            for i in range(num_layers)
-        ]
-        self.layer_types[-1] = "global"
-
+        # trick: hybrid-sliding-window — determine layer types: every Nth layer is global, rest sliding, last forced global
+        layer_types: list[str] = []  # trick: hybrid-sliding-window
+        for i in range(num_layers):  # trick: hybrid-sliding-window
+            if i == num_layers - 1:  # trick: hybrid-sliding-window — last layer is always global
+                layer_types.append("global")  # trick: hybrid-sliding-window
+            elif (i + 1) % sliding_window_pattern == 0:  # trick: hybrid-sliding-window — every Nth layer is global
+                layer_types.append("global")  # trick: hybrid-sliding-window
+            else:  # trick: hybrid-sliding-window
+                layer_types.append("sliding")  # trick: hybrid-sliding-window
+        self.layer_types = layer_types  # trick: hybrid-sliding-window
         self.blocks = nn.ModuleList(
             [
                 Block(
@@ -747,8 +800,8 @@ class GPT(nn.Module):
                     mlp_mult,
                     rope_base,
                     qk_gain_init,
-                    rope_theta=global_rope_theta if self.layer_types[i] == "global" else None,  # trick: dual-rope
-                    partial_rotary_factor=partial_rotary_factor if self.layer_types[i] == "global" else 1.0,  # trick: dual-rope
+                    is_sliding=(self.layer_types[i] == "sliding"),  # trick: hybrid-sliding-window
+                    sliding_window_size=sliding_window_size if self.layer_types[i] == "sliding" else None,  # trick: hybrid-sliding-window
                 )
                 for i in range(num_layers)
             ]
@@ -915,9 +968,8 @@ def main() -> None:
         logit_softcap=args.logit_softcap,
         rope_base=args.rope_base,
         qk_gain_init=args.qk_gain_init,
-        sliding_window_pattern=args.sliding_window_pattern,  # trick: dual-rope
-        global_rope_theta=args.global_rope_theta,  # trick: dual-rope
-        partial_rotary_factor=args.partial_rotary_factor,  # trick: dual-rope
+        sliding_window_pattern=args.sliding_window_pattern,  # trick: hybrid-sliding-window
+        sliding_window_size=args.sliding_window_size,  # trick: hybrid-sliding-window
     ).to(device).bfloat16()
     for module in base_model.modules():
         if isinstance(module, CastedLinear):
@@ -976,6 +1028,30 @@ def main() -> None:
         )
         optimizers.insert(1, optimizer_head)
 
+    # trick: snoo — instantiate outer optimizer over chosen scope (None if disabled)
+    snoo_optim: Snoo | None = None
+    if args.snoo_enabled:
+        if args.snoo_scope == "muon":
+            snoo_params = list(matrix_params)
+        elif args.snoo_scope == "adamw":
+            snoo_params = [base_model.tok_emb.weight]
+            if base_model.lm_head is not None:
+                snoo_params.append(base_model.lm_head.weight)
+            snoo_params.extend(scalar_params)
+        else:
+            raise ValueError(f"unknown SNOO_SCOPE: {args.snoo_scope!r}")
+        snoo_optim = Snoo(
+            snoo_params,
+            lr=args.snoo_lr,
+            momentum=args.snoo_momentum,
+            k=args.snoo_k,
+        )
+        log0(
+            f"snoo enabled scope={args.snoo_scope} lr={args.snoo_lr} "
+            f"momentum={args.snoo_momentum} k={args.snoo_k} "
+            f"wrapped_params={sum(p.numel() for p in snoo_params)}"
+        )
+
     n_params = sum(p.numel() for p in base_model.parameters())
     log0(f"model_params:{n_params}")
     log0(f"world_size:{world_size} grad_accum_steps:{grad_accum_steps}")
@@ -992,7 +1068,7 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
-    log0(f"trick:dual-rope sliding_window_pattern:{args.sliding_window_pattern} global_rope_theta:{args.global_rope_theta} partial_rotary_factor:{args.partial_rotary_factor} layer_types:{base_model.layer_types}")  # trick: dual-rope
+    log0(f"layer_types:{base_model.layer_types} sliding_window_pattern:{args.sliding_window_pattern} sliding_window_size:{args.sliding_window_size}")  # trick: hybrid-sliding-window
 
     if master_process and args.enable_wandb and args.wandb_mode != "disabled":
         try:
@@ -1068,6 +1144,8 @@ def main() -> None:
     if args.warmup_steps > 0:
         initial_model_state = {name: tensor.detach().cpu().clone() for name, tensor in base_model.state_dict().items()}
         initial_optimizer_states = [copy.deepcopy(opt.state_dict()) for opt in optimizers]
+        # trick: snoo — snapshot outer state so warmup does not leak into measured training
+        initial_snoo_state = copy.deepcopy(snoo_optim.state_dict()) if snoo_optim is not None else None
         model.train()
         for warmup_step in range(args.warmup_steps):
             zero_grad_all()
@@ -1080,12 +1158,16 @@ def main() -> None:
                 (warmup_loss * grad_scale).backward()
             for opt in optimizers:
                 opt.step()
+            if snoo_optim is not None:  # trick: snoo
+                snoo_optim.step()
             zero_grad_all()
             if args.warmup_steps <= 20 or (warmup_step + 1) % 10 == 0 or warmup_step + 1 == args.warmup_steps:
                 log0(f"warmup_step:{warmup_step + 1}/{args.warmup_steps}")
         base_model.load_state_dict(initial_model_state, strict=True)
         for opt, state in zip(optimizers, initial_optimizer_states, strict=True):
             opt.load_state_dict(state)
+        if snoo_optim is not None and initial_snoo_state is not None:  # trick: snoo
+            snoo_optim.load_state_dict(initial_snoo_state)
         zero_grad_all()
         if distributed:
             model.require_backward_grad_sync = True
@@ -1171,6 +1253,8 @@ def main() -> None:
             torch.nn.utils.clip_grad_norm_(base_model.parameters(), args.grad_clip_norm)
         for opt in optimizers:
             opt.step()
+        if snoo_optim is not None:  # trick: snoo — outer wrapper (no-op except every k steps)
+            snoo_optim.step()
         zero_grad_all()
 
         step += 1
@@ -1191,6 +1275,13 @@ def main() -> None:
                     "train/step_avg_ms": float(approx_training_time_ms / step),
                     "train/lr_scale": float(scale),
                     "train/muon_momentum": float(muon_momentum),
+<<<<<<<< HEAD:exp/hybrid-sliding-window/train_gpt.py
+========
+                    # trick: snoo — counts how many outer steps Snoo has executed
+                    "train/snoo_outer_steps": int(
+                        (snoo_optim.current_step // snoo_optim.k) if snoo_optim is not None else 0
+                    ),
+>>>>>>>> 95fc86a (update gitignore):exp/snoo/train_gpt.py
                     "train/lr_tok": float(optimizer_tok.param_groups[0]["lr"]),
                     "train/lr_head": float(optimizer_head.param_groups[0]["lr"]) if optimizer_head is not None else 0.0,
                     "train/lr_matrix": float(optimizer_muon.param_groups[0]["lr"]),
