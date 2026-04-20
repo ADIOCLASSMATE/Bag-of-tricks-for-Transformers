@@ -26,4 +26,5 @@ final_model*.ptz
 .cache
 wandb/
 .inspire/
+.pipeline/
 exp/*/logs/
