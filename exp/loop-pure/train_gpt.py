@@ -226,8 +226,8 @@ def build_sentencepiece_luts(
         base_bytes_np[token_id] = len(piece.encode("utf-8"))
     return (
         torch.tensor(base_bytes_np, dtype=torch.int16, device=device),
-        torch.tensor(has_leading_space_np, dtype=torch.bool_, device=device),
-        torch.tensor(is_boundary_token_np, dtype=torch.bool_, device=device),
+        torch.tensor(has_leading_space_np, dtype=torch.bool, device=device),
+        torch.tensor(is_boundary_token_np, dtype=torch.bool, device=device),
     )
 
 
@@ -715,8 +715,7 @@ class GPT(nn.Module):
             for _ in range(num_loop_layers)
         ])
         # No skip_weights — pure loop has no U-Net skip connections  # trick: loop-pure
-        self.num_skip_weights = 0  # trick: loop-pure
-        self.skip_weights = nn.Parameter(torch.empty(0, model_dim, dtype=torch.float32))  # trick: loop-pure — dummy, no skips
+        self.num_skip_weights = 0  # trick: loop-pure — no U-Net skip connections
 
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)

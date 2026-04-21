@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "trainer_path": "exp/loop-stable-A/train_gpt.py",
+  "trainer_path": "exp/swiglu/train_gpt.py",
   "launcher": {
     "nproc_per_node": 8,
     "master_port_base": 29500
@@ -20,16 +20,12 @@
     "model_dim": 512,
     "num_heads": 8,
     "num_kv_heads": 4,
-    "mlp_mult": 2,
-    "num_loop_layers": 3,
-    "num_loop_repeats": 3,
-    "loop_stable_a": 1,
-    "loop_log_a_init": 0.0
+    "mlp_mult": 2
   },
   "experiments": [
     {
-      "name": "loop-stable-A-fixed_time_10min",
-      "trainer_path": "exp/loop-stable-A/train_gpt.py",
+      "name": "swiglu-fixed_time_10min",
+      "trainer_path": "exp/swiglu/train_gpt.py",
       "control": {
         "mode": "fixed_compute",
         "target_wallclock_seconds": 600,
@@ -37,8 +33,8 @@
       }
     },
     {
-      "name": "loop-stable-A-fixed_tokens_10b",
-      "trainer_path": "exp/loop-stable-A/train_gpt.py",
+      "name": "swiglu-fixed_tokens_10b",
+      "trainer_path": "exp/swiglu/train_gpt.py",
       "control": {
         "mode": "fixed_tokens",
         "target_train_tokens": 10000000000

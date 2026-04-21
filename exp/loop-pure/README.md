@@ -62,6 +62,56 @@ All other hyperparameters (model_dim, num_heads, learning rates, etc.) are ident
 | `loop-pure-fixed_time_10min` | Fixed compute, 600s wall-clock | Compare parameter efficiency under equal compute |
 | `loop-pure-fixed_tokens_10b` | Fixed tokens, 10B training tokens | Compare convergence under equal data |
 
+## Results
+
+| Regime | Metric | Baseline | Loop Pure | Delta |
+|---|---|---|---|---|
+| Fixed Compute (10 min) | Val BPB | 1.2194 | 1.3252 | +0.1058 |
+| Fixed Compute (10 min) | Train Tokens | 6.954B | 7.200B | +3.5% |
+| Fixed Compute (10 min) | Peak Memory | 10,246 MiB | 10,149 MiB | -97 MiB |
+| Fixed Tokens (10B) | Val BPB | 1.2118 | 1.3192 | +0.1074 |
+| Fixed Tokens (10B) | Wall-clock | 832.8s | 814.9s | -2.1% |
+| — | Total Params | 17.06M | 6.04M | -64.6% |
+
+## Analysis
+
+### Catastrophic Degradation
+
+Loop Pure is the worst-performing experiment in the entire ablation suite, with a +0.106 BPB regression under fixed-compute and +0.107 under fixed-tokens. To put this in perspective, the gap between loop-pure (1.325) and baseline (1.219) is larger than the combined improvement of all positive tricks (GeGLU -0.021, KV Sharing -0.017, Sandwich Norm -0.006, etc.).
+
+### Why Pure Looping Fails So Badly
+
+1. **Loss of U-Net skip connections is devastating**: The baseline's U-Net skip connections provide direct information highways from encoder to decoder, allowing the model to preserve and route low-level features alongside high-level abstractions. Removing them forces all information to flow through the residual stream across 9 sequential blocks, which severely degrades the model's ability to combine multi-scale features.
+
+2. **Parameter count collapse**: The model has only 6.04M parameters (64.6% fewer than baseline's 17.06M). Three unique blocks must do the work of nine — this is a fundamental capacity bottleneck. The same weights are applied at every depth, so the model cannot learn depth-specific transformations.
+
+3. **No gradient shortcuts**: Without skip connections, gradients must flow through all 9 effective layers (3 blocks x 3 repeats) via the residual stream alone. This creates a long gradient path that is prone to degradation, especially since the same parameters are applied repeatedly.
+
+4. **Representation collapse from weight sharing**: When the same 3 blocks are applied 3 times, each application transforms the hidden state using identical weights. The representations at different loop iterations differ only because the input has changed, not because the transformation has. This limits the representational diversity that the model can express at each depth.
+
+### Faster Per-Step, But Pointless
+
+Interestingly, loop-pure processes slightly more tokens than baseline under fixed-compute (7.20B vs 6.95B) and finishes faster under fixed-tokens (815s vs 833s). This is because the 3 unique blocks (6.04M params) involve less computation per forward pass than 9 unique blocks (17.06M params), and the effective depth equals the baseline (9). But this throughput advantage is meaningless — the per-token quality is so poor that more tokens cannot compensate.
+
+### Implications for Training Method Ablations
+
+Loop-pure serves as the base model for four training method experiments (loop-stable-A, loop-zero-init, loop-depth-sampling, loop-prelude-norm). The catastrophic regression of loop-pure means these experiments are testing whether training methods can partially recover the quality lost from removing U-Net skips and reducing parameter count — they are not testing whether training methods can improve an already-functional architecture.
+
+### Comparison with Loop U-Net Variants
+
+| Variant | Params | Effective Depth | Has Skips | Fixed-Compute BPB | Delta |
+|---------|--------|----------------|-----------|-------------------|-------|
+| Baseline | 17.06M | 9 | Yes (U-Net) | 1.2194 | — |
+| Loop Pure | 6.04M | 9 | No | 1.3252 | +0.1058 |
+| Loop U-Net Mid | 17.06M | 15 | Yes | 1.2160 | -0.0034 |
+| Loop U-Net Full | 17.06M | 17 | Yes | 1.2225 | +0.0031 |
+
+The contrast is stark: looping without skip connections is catastrophic, but looping with skip connections is at worst neutral and at best beneficial. The U-Net skip pattern is the critical enabling factor for looped transformers, not a mere convenience.
+
+### Conclusion
+
+Pure looped transformers without skip connections are not viable at this scale. The combination of parameter reduction (64.6%), loss of multi-scale feature routing, and gradient degradation makes loop-pure fundamentally weaker than the baseline. This finding strongly suggests that any practical looped transformer design must retain some form of skip connection or information highway — the U-Net pattern in loop-unet-mid provides this effectively.
+
 ## File Layout
 
 ```

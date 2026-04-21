@@ -228,8 +228,8 @@ def build_sentencepiece_luts(
         base_bytes_np[token_id] = len(piece.encode("utf-8"))
     return (
         torch.tensor(base_bytes_np, dtype=torch.int16, device=device),
-        torch.tensor(has_leading_space_np, dtype=torch.bool_, device=device),
-        torch.tensor(is_boundary_token_np, dtype=torch.bool_, device=device),
+        torch.tensor(has_leading_space_np, dtype=torch.bool, device=device),
+        torch.tensor(is_boundary_token_np, dtype=torch.bool, device=device),
     )
 
 
@@ -720,7 +720,6 @@ class GPT(nn.Module):
         ])
         # No skip_weights — loop-stable-A has no U-Net skip connections  # trick: loop-stable-A
         self.num_skip_weights = 0  # trick: loop-stable-A
-        self.skip_weights = nn.Parameter(torch.empty(0, model_dim, dtype=torch.float32))  # trick: loop-stable-A — dummy, no skips
 
         # trick: loop-stable-A — stable state transition parameterization (Parcae, 2604.12946)
         # Recurrence: h_{t+1} = A_bar * h_t + B_bar * x0 + block_output

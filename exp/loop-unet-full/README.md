@@ -86,6 +86,47 @@ The ~1.89x FLOP increase means:
 
 Full encoder looping tests whether the U-Net skip pattern is compatible with looped computation. The skip connections from different loop iterations may help stabilize gradient flow through the repeated encoder, potentially making the 1.89x depth increase worthwhile. However, the reduced skip coverage (3 vs. 4 skip connections) and the fact that all encoder passes share parameters (limiting representational diversity) could offset the depth advantage. If this experiment underperforms, it suggests that the U-Net pattern relies on independent encoder representations, not just deeper computation.
 
+## Results
+
+| Regime | Metric | Baseline | Loop U-Net Full | Delta |
+|---|---|---|---|---|
+| Fixed Compute (10 min) | Val BPB | 1.2194 | 1.2225 | +0.0031 |
+| Fixed Compute (10 min) | Train Tokens | 6.954B | 3.879B | -44.2% |
+| Fixed Compute (10 min) | Peak Memory | 10,246 MiB | 18,700 MiB | +8,454 MiB |
+| Fixed Tokens (10B) | Val BPB | 1.2118 | 1.1977 | **-0.0141** |
+| Fixed Tokens (10B) | Wall-clock | 832.8s | 1,529.2s | +83.7% |
+| — | Total Params | 17.06M | 17.06M | 0 |
+
+## Analysis
+
+### Fixed-Compute: Slight Degradation
+
+Under fixed-compute, Loop U-Net Full is slightly worse than baseline (+0.003 BPB). The 1.89x effective depth increase means the model processes 44.2% fewer tokens (3.88B vs 6.95B), and the per-token quality gain is insufficient to compensate for this throughput loss. This contrasts with loop-unet-mid, which manages a small fixed-compute improvement despite similar depth increases.
+
+### Fixed-Tokens: Meaningful Improvement
+
+Under fixed-tokens, the model achieves -0.014 BPB, confirming that the deeper computation does improve per-token quality when data is not the bottleneck. The 83.7% wall-clock increase is consistent with the 1.89x effective depth ratio (the extra overhead comes from the skip connection bookkeeping and the slightly reduced parallelism).
+
+### Why Full Loop Underperforms Mid Loop
+
+Loop U-Net Full (4 looped encoder layers x 3 repeats) is worse than Loop U-Net Mid (1 unique + 3 looped layers x 3 repeats) under both regimes. The key difference is that mid preserves a unique encoder layer (layer 0), while full shares all encoder layers. This has two consequences:
+
+1. **Skip quality degradation**: When all encoder layers are shared, the skip connections from different loop iterations carry representations that differ only in how many times the same transformation has been applied. The diversity of skip information is reduced compared to having at least one independent layer that can learn a fundamentally different transformation.
+
+2. **Gradient homogeneity**: All encoder passes share identical parameters, which means the gradient signal from different loop iterations pushes the same weights in potentially conflicting directions (iteration 1 wants the weights to do one thing, iteration 3 wants them to do something else). Having at least one unique encoder layer breaks this constraint.
+
+### Memory Overhead
+
+Peak memory increases by 8.5 GiB (83%), the highest of any loop experiment. This reflects the 1.89x effective depth requiring proportionally more activation storage for backpropagation. The memory cost alone makes this configuration impractical for larger models.
+
+### Skip Coverage Asymmetry
+
+Only 3 of 5 decoder layers receive skip connections (vs. 4 of 5 in baseline). The last 2 decoder layers operate without any U-Net shortcut, which may limit their effectiveness. This asymmetry is a design limitation — more loop iterations could provide more skips, but at the cost of even more compute and memory.
+
+### Conclusion
+
+Loop U-Net Full demonstrates that simply increasing effective depth through weight sharing is not sufficient — the quality of the shared representations matters. Having at least one unique encoder layer (as in loop-unet-mid) provides a critical anchor point for skip connections and gradient flow. The fixed-compute regression and high memory overhead make this configuration less attractive than loop-unet-mid.
+
 ## Files
 
 - `train_gpt.py`: Training script (baseline + full encoder looping modification)

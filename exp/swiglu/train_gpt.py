@@ -1,11 +1,8 @@
 """
 Hard stop: To keep readable for newcomers, let's make sure the core trainer scripts never are longer than 1500 lines.
 
-trick: loop-unet-mid — Looped middle encoder layers inside U-Net skip architecture.
-  - Unique encoder layers before the looped region
-  - Looped middle block (shared parameters, repeated N times)
-  - Decoder layers with U-Net skip connections from encoder + loop iterations
-  - Same parameter count as baseline (9 unique blocks), deeper effective depth (15)
+trick: swiGLU — Replace ReLU^2 MLP with SwiGLU (Gated SiLU).
+Used in LLaMA, Mistral, and many modern Transformers.
 """
 
 from __future__ import annotations
@@ -79,11 +76,6 @@ class Hyperparameters:
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
     logit_softcap = float(os.environ.get("LOGIT_SOFTCAP", 30.0))
 
-    # trick: loop-unet-mid
-    num_loop_layers = int(os.environ.get("NUM_LOOP_LAYERS", 3))  # layers in the looped block
-    num_loop_repeats = int(os.environ.get("NUM_LOOP_REPEATS", 3))  # how many times to repeat
-    num_unique_encoder = int(os.environ.get("NUM_UNIQUE_ENCODER", 1))  # unique encoder layers before loop
-
     # Optimizer hyperparameters.
     embed_lr = float(os.environ.get("EMBED_LR", 0.6))
     head_lr = float(os.environ.get("HEAD_LR", 0.008))
@@ -121,9 +113,9 @@ def hyperparameters_to_dict(args: Hyperparameters) -> dict[str, object]:
     }
 
 # -----------------------------
-# MUON OPTIMIZER
+# MUON OPTIMIZER 
 # -----------------------------
-#
+# 
 # As borrowed from modded-nanogpt
 # Background on Muon: https://kellerjordan.github.io/posts/muon/
 
@@ -203,7 +195,7 @@ class Muon(torch.optim.Optimizer):
 
 
 # -----------------------------
-# TOKENIZER-AGNOSTIC EVALUATION SETUP
+# TOKENIZER-AGNOSTIC EVALUATION SETUP 
 # -----------------------------
 #
 # It's common for small models have a large fraction of their parameters be embeddings, since the 2 * d_model * d_vocab vectors can be gigantic.
@@ -457,7 +449,7 @@ def dequantize_state_dict_int8(obj: dict[str, object]) -> dict[str, Tensor]:
 
 
 # -----------------------------
-# DATA LOADING
+# DATA LOADING 
 # -----------------------------
 
 def load_data_shard(file: Path) -> Tensor:
@@ -640,17 +632,18 @@ class CausalSelfAttention(nn.Module):
 
 
 class MLP(nn.Module):
-    # relu^2 MLP from the original modded-nanogpt setup
+    # trick: swiGLU — replace relu^2 with gated SiLU (as in LLaMA)
     def __init__(self, dim: int, mlp_mult: int):
         super().__init__()
         hidden = mlp_mult * dim
-        self.fc = CastedLinear(dim, hidden, bias=False)
-        self.proj = CastedLinear(hidden, dim, bias=False)
-        self.proj._zero_init = True
+        self.gate_proj = CastedLinear(dim, hidden, bias=False)  # trick: swiGLU
+        self.up_proj = CastedLinear(dim, hidden, bias=False)    # trick: swiGLU
+        self.down_proj = CastedLinear(hidden, dim, bias=False)  # trick: swiGLU
+        self.down_proj._zero_init = True
 
     def forward(self, x: Tensor) -> Tensor:
-        x = torch.relu(self.fc(x))
-        return self.proj(x.square())
+        # trick: swiGLU — down_proj(silu(gate_proj(x)) * up_proj(x))
+        return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
 
 
 class Block(nn.Module):
@@ -695,9 +688,6 @@ class GPT(nn.Module):
         logit_softcap: float,
         rope_base: float,
         qk_gain_init: float,
-        num_unique_encoder: int = 1,  # trick: loop-unet-mid
-        num_loop_layers: int = 3,  # trick: loop-unet-mid
-        num_loop_repeats: int = 3,  # trick: loop-unet-mid
     ):
         super().__init__()
         if logit_softcap <= 0.0:
@@ -706,37 +696,23 @@ class GPT(nn.Module):
         self.tied_embed_init_std = tied_embed_init_std
         self.logit_softcap = logit_softcap
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
-
-        # trick: loop-unet-mid
-        # Architecture: unique_encoder layers + looped_block (num_loop_layers x num_loop_repeats) + decoder layers
-        # Same unique block count as baseline (9), deeper effective depth (1+3*3+5=15)
-        self.num_unique_encoder = num_unique_encoder  # trick: loop-unet-mid
-        self.num_loop_layers = num_loop_layers  # trick: loop-unet-mid
-        self.num_loop_repeats = num_loop_repeats  # trick: loop-unet-mid
-
-        # Unique encoder layers (before loop)  # trick: loop-unet-mid
-        self.encoder_blocks = nn.ModuleList([
-            Block(model_dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init)
-            for _ in range(num_unique_encoder)
-        ])
-
-        # Looped middle block (shared parameters, repeated)  # trick: loop-unet-mid
-        self.loop_blocks = nn.ModuleList([
-            Block(model_dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init)
-            for _ in range(num_loop_layers)
-        ])
-
-        # Decoder layers  # trick: loop-unet-mid
-        num_decoder = num_layers - num_unique_encoder - num_loop_layers
-        self.num_decoder_layers = num_decoder  # trick: loop-unet-mid
-        # Skip weights: 1 from unique encoder + 1 per loop iteration  # trick: loop-unet-mid
-        self.num_skip_weights = min(num_unique_encoder + num_loop_repeats, num_decoder)  # trick: loop-unet-mid
-        self.skip_weights = nn.Parameter(torch.ones(self.num_skip_weights, model_dim, dtype=torch.float32))  # trick: loop-unet-mid
-        self.decoder_blocks = nn.ModuleList([
-            Block(model_dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init)
-            for _ in range(num_decoder)
-        ])
-
+        self.num_encoder_layers = num_layers // 2
+        self.num_decoder_layers = num_layers - self.num_encoder_layers
+        self.num_skip_weights = min(self.num_encoder_layers, self.num_decoder_layers)
+        self.skip_weights = nn.Parameter(torch.ones(self.num_skip_weights, model_dim, dtype=torch.float32))
+        self.blocks = nn.ModuleList(
+            [
+                Block(
+                    model_dim,
+                    num_heads,
+                    num_kv_heads,
+                    mlp_mult,
+                    rope_base,
+                    qk_gain_init,
+                )
+                for i in range(num_layers)
+            ]
+        )
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)
         if self.lm_head is not None:
@@ -756,23 +732,14 @@ class GPT(nn.Module):
         x0 = x
         skips: list[Tensor] = []
 
-        # trick: loop-unet-mid
-        # Unique encoder layers
-        for block in self.encoder_blocks:
-            x = block(x, x0)
+        # First half stores skips; second half reuses them in reverse order.
+        for i in range(self.num_encoder_layers):
+            x = self.blocks[i](x, x0)
             skips.append(x)
-
-        # Looped middle block  # trick: loop-unet-mid
-        for rep in range(self.num_loop_repeats):
-            for block in self.loop_blocks:
-                x = block(x, x0)
-            skips.append(x)
-
-        # Decoder layers with skip connections  # trick: loop-unet-mid
-        for i, block in enumerate(self.decoder_blocks):
-            if skips and i < len(self.skip_weights):
+        for i in range(self.num_decoder_layers):
+            if skips:
                 x = x + self.skip_weights[i].to(dtype=x.dtype)[None, None, :] * skips.pop()
-            x = block(x, x0)
+            x = self.blocks[self.num_encoder_layers + i](x, x0)
 
         x = self.final_norm(x).reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
@@ -908,9 +875,6 @@ def main() -> None:
         logit_softcap=args.logit_softcap,
         rope_base=args.rope_base,
         qk_gain_init=args.qk_gain_init,
-        num_unique_encoder=args.num_unique_encoder,  # trick: loop-unet-mid
-        num_loop_layers=args.num_loop_layers,  # trick: loop-unet-mid
-        num_loop_repeats=args.num_loop_repeats,  # trick: loop-unet-mid
     ).to(device).bfloat16()
     for module in base_model.modules():
         if isinstance(module, CastedLinear):
@@ -924,15 +888,7 @@ def main() -> None:
     # - untied lm_head (Adam) uses HEAD_LR
     # - matrix params in transformer blocks use MATRIX_LR via Muon
     # - vectors/scalars use SCALAR_LR via Adam
-
-    # trick: loop-unet-mid — collect params from all three block groups
-    all_block_params = (
-        list(base_model.encoder_blocks.named_parameters()) +
-        list(base_model.loop_blocks.named_parameters()) +
-        list(base_model.decoder_blocks.named_parameters())
-    )
-    block_named_params = all_block_params  # trick: loop-unet-mid
-
+    block_named_params = list(base_model.blocks.named_parameters())
     matrix_params = [
         p
         for name, p in block_named_params
@@ -993,9 +949,7 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
-    # trick: loop-unet-mid
-    effective_depth = args.num_unique_encoder + args.num_loop_layers * args.num_loop_repeats + (args.num_layers - args.num_unique_encoder - args.num_loop_layers)
-    log0(f"trick:loop-unet-mid unique_encoder:{args.num_unique_encoder} loop_layers:{args.num_loop_layers} loop_repeats:{args.num_loop_repeats} effective_depth:{effective_depth}")  # trick: loop-unet-mid
+    log0("mlp_activation:swiGLU (replacing relu^2)")  # trick: swiGLU
 
     if master_process and args.enable_wandb and args.wandb_mode != "disabled":
         try:
@@ -1316,13 +1270,6 @@ def main() -> None:
                 "mlp_mult": args.mlp_mult,
                 "vocab_size": args.vocab_size,
                 "model_params": int(n_params),
-                # trick: loop-unet-mid
-                "num_unique_encoder": args.num_unique_encoder,
-                "num_loop_layers": args.num_loop_layers,
-                "num_loop_repeats": args.num_loop_repeats,
-                "effective_depth": args.num_unique_encoder + args.num_loop_layers * args.num_loop_repeats + (args.num_layers - args.num_unique_encoder - args.num_loop_layers),
-                "num_decoder_layers": args.num_layers - args.num_unique_encoder - args.num_loop_layers,
-                "num_skip_weights": min(args.num_unique_encoder + args.num_loop_repeats, args.num_layers - args.num_unique_encoder - args.num_loop_layers),
             },
             "training": {
                 "iterations": args.iterations,

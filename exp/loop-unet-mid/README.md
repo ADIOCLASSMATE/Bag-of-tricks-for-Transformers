@@ -99,6 +99,43 @@ Weight sharing through looping may improve per-token quality (deeper processing,
 
 This experiment isolates the effect of looping the middle encoder while preserving U-Net skip semantics, complementing loop-pure (full model loop) and loop-unet-full (full U-Net with loop) ablations.
 
+## Results
+
+| Regime | Metric | Baseline | Loop U-Net Mid | Delta |
+|---|---|---|---|---|
+| Fixed Compute (10 min) | Val BPB | 1.2194 | 1.2160 | **-0.0034** |
+| Fixed Compute (10 min) | Train Tokens | 6.954B | 4.351B | -37.4% |
+| Fixed Compute (10 min) | Peak Memory | 10,246 MiB | 16,504 MiB | +6,258 MiB |
+| Fixed Tokens (10B) | Val BPB | 1.2118 | 1.1952 | **-0.0166** |
+| Fixed Tokens (10B) | Wall-clock | 832.8s | 1,363.4s | +63.7% |
+| — | Total Params | 17.06M | 17.06M | 0 |
+
+## Analysis
+
+### Fixed-Compute: Marginal Improvement
+
+Under fixed-compute, Loop U-Net Mid achieves a modest -0.003 BPB improvement despite processing 37.4% fewer tokens (4.35B vs 6.95B). The 1.67x effective depth increase (15 vs 9) directly reduces throughput — the model performs more computation per token but sees far fewer tokens total. That the model still improves despite this token deficit suggests the per-token quality gain is real but small.
+
+### Fixed-Tokens: Strong Improvement
+
+Under fixed-tokens, the improvement is more pronounced: -0.017 BPB, comparable to GeGLU (-0.021) and KV Sharing (-0.017). This confirms that when given equal data, the deeper effective processing substantially improves sample efficiency. The 63.7% wall-clock increase aligns with the 1.67x effective depth ratio.
+
+### Why Looping + U-Net Skips Work Together
+
+The U-Net skip connections appear to play a critical stabilizing role. Each loop iteration produces a skip connection that carries features from a different depth of the looped computation to the decoder. This gives the decoder access to multi-scale representations: iteration 1 provides "shallow" features, iteration 2 provides "medium" features, and iteration 3 provides "deep" features. Without these skips, the looped computation would need to propagate all information through the residual stream alone, which is much harder (see loop-pure results).
+
+### Memory Overhead
+
+Peak memory increases by 6.2 GiB (61%), primarily from storing intermediate activations across the longer effective depth (15 vs 9 blocks) for backpropagation. This is a significant cost — the model uses 60% more memory for a modest fixed-compute improvement.
+
+### Comparison with loop-unet-full
+
+Loop U-Net Mid (loop only the middle encoder) outperforms Loop U-Net Full (loop the entire encoder) under both regimes, despite having less effective depth (15 vs 17). This suggests that having at least one unique encoder layer (layer 0) that provides a stable, non-shared representation is important for the skip connection quality. When all encoder layers are shared (loop-unet-full), the skip connections from different iterations carry more homogeneous information, reducing their utility.
+
+### Conclusion
+
+Loop U-Net Mid is a modest win under fixed-compute and a strong win under fixed-tokens. The U-Net skip connections effectively stabilize the looped computation, and keeping one unique encoder layer preserves skip quality. However, the significant memory and throughput overhead means this trick is best suited for scenarios where compute is abundant but parameter budget is constrained.
+
 ## Files
 
 - `train_gpt.py`: Training script (baseline + loop-unet-mid modification)
