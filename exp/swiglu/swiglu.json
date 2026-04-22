@@ -11,8 +11,8 @@
     "vocab_size": 1024,
     "train_batch_tokens": 524288,
     "train_seq_len": 1024,
-    "warmup_steps": 20,
-    "warmdown_iters": 1200,
+    "warmup_steps": 50,
+    "warmdown_iters": 1500,
     "enable_wandb": 1,
     "wandb_mode": "offline",
     "wandb_project": "bag-of-tricks-for-transformers",
@@ -20,7 +20,17 @@
     "model_dim": 512,
     "num_heads": 8,
     "num_kv_heads": 4,
-    "mlp_mult": 2
+    "mlp_mult": 2,
+    "tied_embed_lr": 0.05,
+    "embed_lr": 0.6,
+    "head_lr": 0.008,
+    "matrix_lr": 0.04,
+    "scalar_lr": 0.04,
+    "muon_momentum": 0.95,
+    "muon_backend_steps": 5,
+    "muon_momentum_warmup_start": 0.85,
+    "muon_momentum_warmup_steps": 800,
+    "grad_clip_norm": 0.0
   },
   "experiments": [
     {

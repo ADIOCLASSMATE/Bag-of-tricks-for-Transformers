@@ -26,12 +26,12 @@ By reporting results on both axes, we disentangle tricks that merely redistribut
 │   ├── baseline-sp1024/        # Reference baseline
 │   │   ├── train_gpt.py        # Trainer script
 │   │   └── baseline-sp1024.json# Experiment manifest
-│   ├── baseline-seq2048/       # Seq-length ablation (same tokenizer/data, seq_len=2048)
+│   ├── seq-2048/               # Seq-length ablation (same tokenizer/data, seq_len=2048)
 │   │   ├── train_gpt.py
-│   │   └── baseline-seq2048.json
-│   ├── baseline-seq4096/       # Seq-length ablation (same tokenizer/data, seq_len=4096)
+│   │   └── seq-2048.json
+│   ├── seq-4096/               # Seq-length ablation (same tokenizer/data, seq_len=4096)
 │   │   ├── train_gpt.py
-│   │   └── baseline-seq4096.json
+│   │   └── seq-4096.json
 │   ├── muon/                   # Example trick: Muon optimizer
 │   └── run_experiments.py      # Unified experiment scheduler
 ├── data/                       # Data pipeline & tokenizer assets
@@ -65,7 +65,7 @@ Each experiment directory should include a `README.md` that covers:
 - **Impact on training**: how it affects throughput, memory, convergence, etc.
 - **BPB analysis**: comparison with the baseline under both evaluation regimes, and discussion of possible factors behind the observed BPB change (e.g., better gradient signal, longer context, reduced overhead).
 
-See `exp/baseline-seq2048/README.md` for a concrete example.
+See `exp/seq-2048/README.md` for a concrete example.
 
 **2. Create an experiment manifest**
 
