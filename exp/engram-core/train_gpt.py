@@ -1,12 +1,24 @@
 """
-Hard stop: To keep readable for newcomers, let's make sure the core trainer scripts never are longer than 1500 lines.
+Naive architecture GPT with strong training recipe + engram memory branches.
+
+Architecture is standard (no tricks) plus engram: GQA, RoPE, RMSNorm (no learnable weight), QK-Norm, Tied Embeddings,
+CastedLinear, restore_low_dim_params_to_fp32.
+
+Engram trick: n-gram memory branches inserted at specific transformer layers. Each EngramBranch hashes input token
+n-grams into a multi-head embedding table, gates the retrieved values against the hidden state, and adds the result
+as a residual. Includes short-convolution mixing and optional tokenizer compression for smaller hash vocabularies.
+
+Training recipe borrows from modded-nanogpt:
+  - Muon optimizer for matrix params, Adam for scalar/embed params with separate LRs
+  - Muon momentum warmup
+  - No weight decay, no grad clip
+  - JIT warmup with state reset
 """
 
 from __future__ import annotations
 
 import copy
 import glob
-import io
 import json
 import math
 import os
@@ -17,7 +29,6 @@ import sys
 import time
 import unicodedata
 import uuid
-import zlib
 from pathlib import Path
 
 import numpy as np
@@ -31,17 +42,12 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 # -----------------------------
 # HYPERPARAMETERS
 # -----------------------------
-# Default Simple Baseline run:
-# - 9 transformer blocks at width 512
-# - 8 attention heads with 4 KV heads (GQA) and 2x MLP expansion
-# - vocab size 1024, sequence length 1024, tied embeddings
-# - 524,288 train tokens per step for 20,000 iterations with a ~10 minute cap
 
 class Hyperparameters:
-    # Data paths are shard globs produced by the existing preprocessing pipeline.
+    # Data paths
     data_path = os.environ.get("DATA_PATH", "./data/datasets/fineweb10B_sp1024")
     train_files = os.path.join(data_path, "fineweb_train_*.bin")
-    val_files = os.path.join(data_path, "fineweb_val_*.bin")
+    val_files = os.environ.get("VAL_FILES", os.path.join(data_path, "fineweb_val_*.bin"))
     tokenizer_path = os.environ.get("TOKENIZER_PATH", "./data/tokenizers/fineweb_1024_bpe.model")
     run_id = os.environ.get("RUN_ID", str(uuid.uuid4()))
     output_dir = os.environ.get("OUTPUT_DIR", "logs")
@@ -50,21 +56,20 @@ class Hyperparameters:
     target_train_tokens = int(os.environ.get("TARGET_TRAIN_TOKENS", "0"))
     seed = int(os.environ.get("SEED", 1337))
 
-    # Validation cadence and batch size. Validation always uses the full fineweb_val split.
+    # Validation cadence and batch size
     val_batch_size = int(os.environ.get("VAL_BATCH_SIZE", 524_288))
     val_loss_every = int(os.environ.get("VAL_LOSS_EVERY", 1000))
     train_log_every = int(os.environ.get("TRAIN_LOG_EVERY", 200))
 
-    # Training length.
+    # Training length
     iterations = int(os.environ.get("ITERATIONS", 20000))
-    warmdown_iters = int(os.environ.get("WARMDOWN_ITERS", 1200))
-    warmup_steps = int(os.environ.get("WARMUP_STEPS", 20))
+    warmdown_iters = int(os.environ.get("WARMDOWN_ITERS", 1500))
+    warmup_steps = int(os.environ.get("WARMUP_STEPS", 50))
     train_batch_tokens = int(os.environ.get("TRAIN_BATCH_TOKENS", 524_288))
     train_seq_len = int(os.environ.get("TRAIN_SEQ_LEN", 1024))
     max_wallclock_seconds = float(os.environ.get("MAX_WALLCLOCK_SECONDS", 600.0))
-    qk_gain_init = float(os.environ.get("QK_GAIN_INIT", 1.5))
 
-    # Model shape.
+    # Model shape
     vocab_size = int(os.environ.get("VOCAB_SIZE", 1024))
     num_layers = int(os.environ.get("NUM_LAYERS", 9))
     num_kv_heads = int(os.environ.get("NUM_KV_HEADS", 4))
@@ -73,7 +78,8 @@ class Hyperparameters:
     mlp_mult = int(os.environ.get("MLP_MULT", 2))
     tie_embeddings = bool(int(os.environ.get("TIE_EMBEDDINGS", "1")))
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
-    logit_softcap = float(os.environ.get("LOGIT_SOFTCAP", 30.0))
+
+    # Engram hyperparameters
     engram_enabled = bool(int(os.environ.get("ENGRAM_ENABLED", "1")))
     engram_layer_ids = os.environ.get("ENGRAM_LAYER_IDS", "1,4,8")
     engram_max_ngram = int(os.environ.get("ENGRAM_MAX_NGRAM", 3))
@@ -88,32 +94,29 @@ class Hyperparameters:
     engram_use_tokenizer_compression = bool(
         int(os.environ.get("ENGRAM_USE_TOKENIZER_COMPRESSION", "0"))
     )
-    engram_use_hc = bool(int(os.environ.get("ENGRAM_USE_HC", "0")))
-    engram_hc_mult = int(os.environ.get("ENGRAM_HC_MULT", 4))
     engram_warmup_steps = int(os.environ.get("ENGRAM_WARMUP_STEPS", "0"))
     engram_soft_constraint_steps = int(os.environ.get("ENGRAM_SOFT_CONSTRAINT_STEPS", "0"))
     engram_soft_constraint_min = float(os.environ.get("ENGRAM_SOFT_CONSTRAINT_MIN", "0.1"))
 
-    # Optimizer hyperparameters.
+    # Optimizer hyperparameters (Muon + Adam, from modded-nanogpt)
     embed_lr = float(os.environ.get("EMBED_LR", 0.6))
     head_lr = float(os.environ.get("HEAD_LR", 0.008))
     tied_embed_lr = float(os.environ.get("TIED_EMBED_LR", 0.05))
-    tied_embed_init_std = float(os.environ.get("TIED_EMBED_INIT_STD", 0.005))
     matrix_lr = float(os.environ.get("MATRIX_LR", 0.04))
     scalar_lr = float(os.environ.get("SCALAR_LR", 0.04))
     muon_momentum = float(os.environ.get("MUON_MOMENTUM", 0.95))
     muon_backend_steps = int(os.environ.get("MUON_BACKEND_STEPS", 5))
     muon_momentum_warmup_start = float(os.environ.get("MUON_MOMENTUM_WARMUP_START", 0.85))
-    muon_momentum_warmup_steps = int(os.environ.get("MUON_MOMENTUM_WARMUP_STEPS", 500))
+    muon_momentum_warmup_steps = int(os.environ.get("MUON_MOMENTUM_WARMUP_STEPS", 800))
     beta1 = float(os.environ.get("BETA1", 0.9))
     beta2 = float(os.environ.get("BETA2", 0.95))
     adam_eps = float(os.environ.get("ADAM_EPS", 1e-8))
     grad_clip_norm = float(os.environ.get("GRAD_CLIP_NORM", 0.0))
     engram_embed_lr = float(os.environ.get("ENGRAM_EMBED_LR", 0.02))
 
-    # Optional W&B logging.
+    # Optional W&B logging
     enable_wandb = bool(int(os.environ.get("ENABLE_WANDB", "1")))
-    wandb_project = os.environ.get("WANDB_PROJECT", "parameter-golf")
+    wandb_project = os.environ.get("WANDB_PROJECT", "bag-of-tricks-for-transformers")
     wandb_entity = os.environ.get("WANDB_ENTITY")
     wandb_run_name = os.environ.get("WANDB_RUN_NAME", run_id)
     wandb_group = os.environ.get("WANDB_GROUP")
@@ -144,15 +147,22 @@ def parse_optional_int_csv(raw: str) -> tuple[int, ...]:
     return parse_int_csv(raw)
 
 # -----------------------------
-# MUON OPTIMIZER 
+# MUON OPTIMIZER
 # -----------------------------
-# 
 # As borrowed from modded-nanogpt
 # Background on Muon: https://kellerjordan.github.io/posts/muon/
 
+CONTROL_TENSOR_NAME_PATTERNS = tuple(
+    pattern
+    for pattern in os.environ.get(
+        "CONTROL_TENSOR_NAME_PATTERNS",
+        "",
+    ).split(",")
+    if pattern
+)
+
+
 def zeropower_via_newtonschulz5(G: Tensor, steps: int = 10, eps: float = 1e-7) -> Tensor:
-    # Orthogonalize a 2D update matrix with a fast Newton-Schulz iteration.
-    # Muon uses this to normalize matrix-shaped gradients before applying them.
     a, b, c = (3.4445, -4.7750, 2.0315)
     X = G.bfloat16()
     X /= X.norm() + eps
@@ -208,7 +218,6 @@ class Muon(torch.optim.Optimizer):
                     if nesterov:
                         g = g.add(buf, alpha=momentum)
                     g = zeropower_via_newtonschulz5(g, steps=backend_steps)
-                    # Scale correction from Muon reference implementations.
                     g *= max(1, g.size(0) / g.size(1)) ** 0.5
                     updates_flat[curr : curr + p.numel()] = g.reshape(-1)
                 curr += p.numel()
@@ -226,13 +235,8 @@ class Muon(torch.optim.Optimizer):
 
 
 # -----------------------------
-# TOKENIZER-AGNOSTIC EVALUATION SETUP 
+# TOKENIZER-AGNOSTIC EVALUATION SETUP
 # -----------------------------
-#
-# It's common for small models have a large fraction of their parameters be embeddings, since the 2 * d_model * d_vocab vectors can be gigantic.
-# Instead of locking the tokenizer, we let you bring your own and calculate our validation metrics on the average compression of the validation set.
-# We calculate BPB (bits-per-byte) instead of validation loss, so we need methods to count the number of bits per token in the tokenizer.
-# Note: Submissions that edit the tokenizer will be examined more carefully, since screwing this up might unjustly improve your score.
 
 def build_sentencepiece_luts(
     sp: spm.SentencePieceProcessor, vocab_size: int, device: torch.device
@@ -250,7 +254,7 @@ def build_sentencepiece_luts(
             base_bytes_np[token_id] = 1
             continue
         piece = sp.id_to_piece(token_id)
-        if piece.startswith("▁"):
+        if piece.startswith("\u2581"):
             has_leading_space_np[token_id] = True
             piece = piece[1:]
         base_bytes_np[token_id] = len(piece.encode("utf-8"))
@@ -265,7 +269,6 @@ def load_validation_tokens(pattern: str, seq_len: int) -> Tensor:
     files = [Path(p) for p in sorted(glob.glob(pattern))]
     if not files:
         raise FileNotFoundError(f"No files found for pattern: {pattern}")
-    # The export pipeline writes the fixed first-50k-doc validation set to fineweb_val_*.
     tokens = torch.cat([load_data_shard(file) for file in files]).contiguous()
     usable = ((tokens.numel() - 1) // seq_len) * seq_len
     if usable <= 0:
@@ -285,9 +288,6 @@ def eval_val(
     has_leading_space_lut: Tensor,
     is_boundary_token_lut: Tensor,
 ) -> tuple[float, float]:
-    # Validation computes two metrics:
-    # - val_loss: token cross-entropy (natural log)
-    # - val_bpb: tokenizer-agnostic compression metric used by the challenge
     local_batch_tokens = args.val_batch_size // (world_size * grad_accum_steps)
     if local_batch_tokens < args.train_seq_len:
         raise ValueError(
@@ -337,49 +337,21 @@ def eval_val(
 # -----------------------------
 # POST-TRAINING QUANTIZATION
 # -----------------------------
-#
-# It's silly to export our model, which is trained in bf16 and fp32, at that same precision.
-# Instead, we get approximately the same model (with a small hit) by quantizing the model to int8 & zlib compressing.
-# We can then decompress the model and run in higher precision for evaluation, after closing in under the size limit.
 
-CONTROL_TENSOR_NAME_PATTERNS = tuple(
-    pattern
-    for pattern in os.environ.get(
-        "CONTROL_TENSOR_NAME_PATTERNS",
-        "attn_scale,attn_scales,mlp_scale,mlp_scales,resid_mix,resid_mixes,q_gain,skip_weight,skip_weights",
-    ).split(",")
-    if pattern
-)
-INT8_KEEP_FLOAT_FP32_NAME_PATTERNS = tuple(
-    pattern
-    for pattern in os.environ.get(
-        "INT8_KEEP_FLOAT_FP32_NAME_PATTERNS",
-        ",".join(CONTROL_TENSOR_NAME_PATTERNS),
-    ).split(",")
-    if pattern
-)
 INT8_KEEP_FLOAT_MAX_NUMEL = 65_536
 INT8_KEEP_FLOAT_STORE_DTYPE = torch.float16
 INT8_PER_ROW_SCALE_DTYPE = torch.float16
 INT8_CLIP_PERCENTILE = 99.99984
 INT8_CLIP_Q = INT8_CLIP_PERCENTILE / 100.0
 
+
 def tensor_nbytes(t: Tensor) -> int:
     return int(t.numel()) * int(t.element_size())
 
-def keep_float_tensor(name: str, t: Tensor, passthrough_orig_dtypes: dict[str, str]) -> Tensor:
-    if any(pattern in name for pattern in INT8_KEEP_FLOAT_FP32_NAME_PATTERNS):
-        return t.float().contiguous()
-    if t.dtype in {torch.float32, torch.bfloat16}:
-        passthrough_orig_dtypes[name] = str(t.dtype).removeprefix("torch.")
-        return t.to(dtype=INT8_KEEP_FLOAT_STORE_DTYPE).contiguous()
-    return t
 
 def quantize_float_tensor(t: Tensor) -> tuple[Tensor, Tensor]:
     t32 = t.float()
     if t32.ndim == 2:
-        # Matrices get one scale per row, which usually tracks output-channel
-        # ranges much better than a single tensor-wide scale.
         clip_abs = (
             torch.quantile(t32.abs(), INT8_CLIP_Q, dim=1)
             if t32.numel()
@@ -390,18 +362,13 @@ def quantize_float_tensor(t: Tensor) -> tuple[Tensor, Tensor]:
         q = torch.clamp(torch.round(clipped / scale[:, None]), -127, 127).to(torch.int8).contiguous()
         return q, scale.to(dtype=INT8_PER_ROW_SCALE_DTYPE).contiguous()
 
-    # Vectors / scalars use a simpler per-tensor scale.
     clip_abs = float(torch.quantile(t32.abs().flatten(), INT8_CLIP_Q).item()) if t32.numel() else 0.0
     scale = torch.tensor(clip_abs / 127.0 if clip_abs > 0 else 1.0, dtype=torch.float32)
     q = torch.clamp(torch.round(torch.clamp(t32, -clip_abs, clip_abs) / scale), -127, 127).to(torch.int8).contiguous()
     return q, scale
 
+
 def quantize_state_dict_int8(state_dict: dict[str, Tensor]):
-    # Single supported clean-script export format:
-    # - per-row int8 for 2D float tensors
-    # - per-tensor int8 for other float tensors
-    # - exact passthrough for non-floats
-    # - passthrough for small float tensors, stored as fp16 to save bytes
     quantized: dict[str, Tensor] = {}
     scales: dict[str, Tensor] = {}
     dtypes: dict[str, str] = {}
@@ -425,10 +392,9 @@ def quantize_state_dict_int8(state_dict: dict[str, Tensor]):
             stats["int8_payload_bytes"] += tensor_nbytes(t)
             continue
 
-        # Small float tensors are cheap enough to keep directly. We still downcast
-        # fp32/bf16 passthrough tensors to fp16 so metadata does not dominate size.
         if t.numel() <= INT8_KEEP_FLOAT_MAX_NUMEL:
-            kept = keep_float_tensor(name, t, passthrough_orig_dtypes)
+            passthrough_orig_dtypes[name] = str(t.dtype).removeprefix("torch.")
+            kept = t.to(dtype=INT8_KEEP_FLOAT_STORE_DTYPE).contiguous()
             passthrough[name] = kept
             stats["int8_payload_bytes"] += tensor_nbytes(kept)
             continue
@@ -455,6 +421,7 @@ def quantize_state_dict_int8(state_dict: dict[str, Tensor]):
         obj["passthrough_orig_dtypes"] = passthrough_orig_dtypes
     return obj, stats
 
+
 def dequantize_state_dict_int8(obj: dict[str, object]) -> dict[str, Tensor]:
     out: dict[str, Tensor] = {}
     qmeta = obj.get("qmeta", {})
@@ -464,13 +431,11 @@ def dequantize_state_dict_int8(obj: dict[str, object]) -> dict[str, Tensor]:
         s = obj["scales"][name]
         if qmeta.get(name, {}).get("scheme") == "per_row" or s.ndim > 0:
             s = s.to(dtype=torch.float32)
-            # Broadcast the saved row scale back across trailing dimensions.
             out[name] = (q.float() * s.view(q.shape[0], *([1] * (q.ndim - 1)))).to(dtype=dtype).contiguous()
         else:
             scale = float(s.item())
             out[name] = (q.float() * scale).to(dtype=dtype).contiguous()
     for name, t in obj["passthrough"].items():
-        # Restore small tensors, undoing the temporary fp16 storage cast if needed.
         out_t = t.detach().to("cpu").contiguous()
         orig_dtype = passthrough_orig_dtypes.get(name)
         if isinstance(orig_dtype, str):
@@ -480,14 +445,13 @@ def dequantize_state_dict_int8(obj: dict[str, object]) -> dict[str, Tensor]:
 
 
 # -----------------------------
-# DATA LOADING 
+# DATA LOADING
 # -----------------------------
 
 def load_data_shard(file: Path) -> Tensor:
     header_bytes = 256 * np.dtype("<i4").itemsize
     token_bytes = np.dtype("<u2").itemsize
     header = np.fromfile(file, dtype="<i4", count=256)
-    # SHARD HEADER INTS & SHARD_MAGIC
     if header.size != 256 or int(header[0]) != 20240520 or int(header[1]) != 1:
         raise ValueError(f"Unexpected shard header for {file}")
     num_tokens = int(header[2])
@@ -501,8 +465,6 @@ def load_data_shard(file: Path) -> Tensor:
 
 
 class TokenStream:
-    # Reads shards sequentially and wraps around forever. The training loop therefore
-    # has deterministic, simple streaming behavior with no sampling or workers.
     def __init__(self, pattern: str):
         self.files = [Path(p) for p in sorted(glob.glob(pattern))]
         if not self.files:
@@ -532,8 +494,6 @@ class TokenStream:
 
 
 class DistributedTokenLoader:
-    # Each call consumes a contiguous chunk from the shared token stream, then slices out
-    # one disjoint span per rank. The extra "+1" token lets us build (x, y) by shifting.
     def __init__(self, pattern: str, rank: int, world_size: int, device: torch.device):
         self.rank = rank
         self.world_size = world_size
@@ -553,7 +513,6 @@ class DistributedTokenLoader:
 # -----------------------------
 # TRANSFORMER MODULES
 # -----------------------------
-
 
 def is_prime(n: int) -> bool:
     if n < 2:
@@ -647,6 +606,7 @@ def build_engram_compression_lookup(
 
     return torch.tensor(old_to_new, dtype=torch.long), len(key_to_new)
 
+
 class RMSNorm(nn.Module):
     def __init__(self, eps: float | None = None):
         super().__init__()
@@ -672,7 +632,6 @@ def restore_low_dim_params_to_fp32(module: nn.Module) -> None:
 
 
 class Rotary(nn.Module):
-    # Caches cos/sin tables per sequence length on the current device.
     def __init__(self, dim: int, base: float = 10000.0):
         super().__init__()
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
@@ -693,12 +652,12 @@ class Rotary(nn.Module):
             self._cos_cached = freqs.cos()[None, None, :, :]
             self._sin_cached = freqs.sin()[None, None, :, :]
             self._seq_len_cached = seq_len
-        return self._cos_cached.to(dtype=dtype), self._sin_cached.to(dtype=dtype)
+        return self._cos_cached.to(dtype=dtype).clone(), self._sin_cached.to(dtype=dtype).clone()
 
 
 def apply_rotary_emb(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
     half = x.size(-1) // 2
-    x1, x2 = x[..., :half], x[..., half:]
+    x1, x2 = x[..., :half].clone(), x[..., half:].clone()
     return torch.cat((x1 * cos + x2 * sin, x1 * (-sin) + x2 * cos), dim=-1)
 
 
@@ -709,7 +668,6 @@ class CausalSelfAttention(nn.Module):
         num_heads: int,
         num_kv_heads: int,
         rope_base: float,
-        qk_gain_init: float,
     ):
         super().__init__()
         if dim % num_heads != 0:
@@ -726,8 +684,6 @@ class CausalSelfAttention(nn.Module):
         self.c_k = CastedLinear(dim, kv_dim, bias=False)
         self.c_v = CastedLinear(dim, kv_dim, bias=False)
         self.proj = CastedLinear(dim, dim, bias=False)
-        self.proj._zero_init = True
-        self.q_gain = nn.Parameter(torch.full((num_heads,), qk_gain_init, dtype=torch.float32))
         self.rotary = Rotary(self.head_dim, base=rope_base)
 
     def forward(self, x: Tensor) -> Tensor:
@@ -735,12 +691,12 @@ class CausalSelfAttention(nn.Module):
         q = self.c_q(x).reshape(bsz, seqlen, self.num_heads, self.head_dim).transpose(1, 2)
         k = self.c_k(x).reshape(bsz, seqlen, self.num_kv_heads, self.head_dim).transpose(1, 2)
         v = self.c_v(x).reshape(bsz, seqlen, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        # QK-Norm: RMS normalize Q and K before RoPE
         q = F.rms_norm(q, (q.size(-1),))
         k = F.rms_norm(k, (k.size(-1),))
         cos, sin = self.rotary(seqlen, x.device, q.dtype)
         q = apply_rotary_emb(q, cos, sin)
         k = apply_rotary_emb(k, cos, sin)
-        q = q * self.q_gain.to(dtype=q.dtype)[None, :, None, None]
         y = F.scaled_dot_product_attention(
             q,
             k,
@@ -754,17 +710,14 @@ class CausalSelfAttention(nn.Module):
 
 
 class MLP(nn.Module):
-    # relu^2 MLP from the original modded-nanogpt setup
     def __init__(self, dim: int, mlp_mult: int):
         super().__init__()
         hidden = mlp_mult * dim
         self.fc = CastedLinear(dim, hidden, bias=False)
         self.proj = CastedLinear(hidden, dim, bias=False)
-        self.proj._zero_init = True
 
     def forward(self, x: Tensor) -> Tensor:
-        x = torch.relu(self.fc(x))
-        return self.proj(x.square())
+        return self.proj(F.gelu(self.fc(x)))
 
 
 class MultiHeadEmbedding(nn.Module):
@@ -781,17 +734,14 @@ class MultiHeadEmbedding(nn.Module):
 
 
 class EngramShortConv(nn.Module):
-    def __init__(self, dim: int, kernel_size: int, dilation: int, hc_mult: int):
+    def __init__(self, dim: int, kernel_size: int, dilation: int):
         super().__init__()
-        self.hc_mult = hc_mult
-        self.norms = nn.ModuleList(
-            nn.RMSNorm(dim, eps=1e-5) for _ in range(hc_mult)
-        )
+        self.norm = nn.RMSNorm(dim, eps=1e-5)
         self.conv = nn.Conv1d(
-            dim * hc_mult,
-            dim * hc_mult,
+            dim,
+            dim,
             kernel_size=kernel_size,
-            groups=dim * hc_mult,
+            groups=dim,
             bias=False,
             padding=(kernel_size - 1) * dilation,
             dilation=dilation,
@@ -799,21 +749,14 @@ class EngramShortConv(nn.Module):
         nn.init.zeros_(self.conv.weight)
 
     def forward(self, x: Tensor) -> Tensor:
-        if x.dim() != 4:
-            raise ValueError("EngramShortConv expects [B, L, HC_MULT, D] input")
-        if x.size(2) != self.hc_mult:
-            raise ValueError(f"Input groups {x.size(2)} != hc_mult {self.hc_mult}")
-        normed_chunks = [
-            self.norms[idx](x[:, :, idx, :]) for idx in range(self.hc_mult)
-        ]
-        x_norm = torch.cat(normed_chunks, dim=-1)
-        y = self.conv(x_norm.transpose(1, 2))
+        # x: [B, L, D]
+        y = self.conv(self.norm(x).transpose(1, 2))
         y = F.silu(y[..., : x.size(1)])
-        return y.transpose(1, 2).view(x.size(0), x.size(1), self.hc_mult, x.size(3)).contiguous()
+        return y.transpose(1, 2).contiguous()
 
 
 class EngramBranch(nn.Module):
-    # trick: native Engram memory branch with optional hyper-connection-aware gating.
+    # trick: engram memory branch
     def __init__(
         self,
         dim: int,
@@ -825,7 +768,6 @@ class EngramBranch(nn.Module):
         kernel_size: int,
         pad_id: int,
         seed: int,
-        hc_mult: int,
         hash_vocab_size: int,
         compression_lookup: Tensor | None = None,
         engram_warmup_steps: int = 0,
@@ -843,23 +785,16 @@ class EngramBranch(nn.Module):
         self.max_ngram_size = max_ngram_size
         self.heads_per_ngram = heads_per_ngram
         self.pad_id = pad_id
-        self.hc_mult = hc_mult
         self.embed_per_ngram = embed_per_ngram
         total_embed_dim = (max_ngram_size - 1) * embed_per_ngram
         head_dim = embed_per_ngram // heads_per_ngram
         self.multi_head_embedding = MultiHeadEmbedding(head_vocab_sizes, head_dim)
         self.value_proj = nn.Linear(total_embed_dim, dim)
-        self.key_projs = nn.ModuleList(
-            nn.Linear(total_embed_dim, dim) for _ in range(hc_mult)
-        )
-        self.key_norms = nn.ModuleList(
-            nn.RMSNorm(dim, eps=1e-5) for _ in range(hc_mult)
-        )
-        self.query_norms = nn.ModuleList(
-            nn.RMSNorm(dim, eps=1e-5) for _ in range(hc_mult)
-        )
+        self.key_proj = nn.Linear(total_embed_dim, dim)
+        self.key_norm = nn.RMSNorm(dim, eps=1e-5)
+        self.query_norm = nn.RMSNorm(dim, eps=1e-5)
         self.short_conv = EngramShortConv(
-            dim, kernel_size=kernel_size, dilation=max_ngram_size, hc_mult=hc_mult
+            dim, kernel_size=kernel_size, dilation=max_ngram_size
         )
         if compression_lookup is not None:
             self.register_buffer(
@@ -923,23 +858,13 @@ class EngramBranch(nn.Module):
         return torch.cat(head_chunks, dim=-1)
 
     def forward(self, hidden_states: Tensor, input_ids: Tensor) -> Tensor:
-        squeeze_output = False
-        if hidden_states.dim() == 3:
-            hidden_states = hidden_states.unsqueeze(2)
-            squeeze_output = True
-        if hidden_states.dim() != 4:
-            raise ValueError("EngramBranch expects hidden_states with shape [B, L, HC_MULT, D]")
-        if hidden_states.size(2) != self.hc_mult:
-            raise ValueError(f"hidden_states groups {hidden_states.size(2)} != hc_mult {self.hc_mult}")
+        # hidden_states: [B, L, D]
         embeddings = self.multi_head_embedding(self._hash_input_ids(input_ids)).flatten(start_dim=-2)
-        gates = []
-        for hc_idx in range(self.hc_mult):
-            key = self.key_norms[hc_idx](self.key_projs[hc_idx](embeddings))
-            query = self.query_norms[hc_idx](hidden_states[:, :, hc_idx, :])
-            gate = (key * query).sum(dim=-1, keepdim=True) / math.sqrt(hidden_states.size(-1))
-            gate = gate.abs().clamp_min(1e-6).sqrt() * gate.sign()
-            gates.append(gate.sigmoid())
-        gate_tensor = torch.stack(gates, dim=2)
+        key = self.key_norm(self.key_proj(embeddings))
+        query = self.query_norm(hidden_states)
+        gate = (key * query).sum(dim=-1, keepdim=True) / math.sqrt(hidden_states.size(-1))
+        gate = gate.abs().clamp_min(1e-6).sqrt() * gate.sign()
+        gate_tensor = gate.sigmoid()
         current_step = self._engram_step.to(device=gate_tensor.device)
         warmup_steps = self._engram_warmup_steps.to(device=gate_tensor.device)
         soft_constraint_steps = self._engram_soft_constraint_steps.to(device=gate_tensor.device)
@@ -949,9 +874,9 @@ class EngramBranch(nn.Module):
         soft_constraint_mask = (current_step >= warmup_steps) & (current_step < soft_constraint_end)
         soft_constraint_min = self._engram_soft_constraint_min.to(device=gate_tensor.device, dtype=gate_tensor.dtype)
         gate_tensor = torch.where(soft_constraint_mask, gate_tensor.clamp_min(soft_constraint_min), gate_tensor)
-        value = gate_tensor * self.value_proj(embeddings).unsqueeze(2)
+        value = gate_tensor * self.value_proj(embeddings)
         output = value + self.short_conv(value)
-        return output.squeeze(2) if squeeze_output else output
+        return output
 
 
 class Block(nn.Module):
@@ -963,18 +888,13 @@ class Block(nn.Module):
         num_kv_heads: int,
         mlp_mult: int,
         rope_base: float,
-        qk_gain_init: float,
-        use_hc: bool,
-        hc_mult: int,
         engram_settings: dict[str, object] | None = None,
     ):
         super().__init__()
         self.attn_norm = RMSNorm()
         self.mlp_norm = RMSNorm()
-        self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base, qk_gain_init)
+        self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base)
         self.mlp = MLP(dim, mlp_mult)
-        self.use_hc = use_hc
-        self.hc_mult = hc_mult
         self.engram: EngramBranch | None = None
         if engram_settings is not None and layer_id in engram_settings["layer_ids"]:
             self.engram = EngramBranch(
@@ -987,37 +907,18 @@ class Block(nn.Module):
                 kernel_size=int(engram_settings["kernel_size"]),
                 pad_id=int(engram_settings["pad_id"]),
                 seed=int(engram_settings["seed"]),
-                hc_mult=hc_mult,
                 hash_vocab_size=int(engram_settings["hash_vocab_size"]),
                 compression_lookup=engram_settings["compression_lookup"],
                 engram_warmup_steps=int(engram_settings["engram_warmup_steps"]),
                 engram_soft_constraint_steps=int(engram_settings["engram_soft_constraint_steps"]),
                 engram_soft_constraint_min=float(engram_settings["engram_soft_constraint_min"]),
             )
-        self.attn_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
-        self.mlp_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
-        self.resid_mix = nn.Parameter(torch.stack((torch.ones(dim), torch.zeros(dim))).float())
 
-    def forward(self, x: Tensor, x0: Tensor, input_ids: Tensor) -> Tensor:
-        mix = self.resid_mix.to(dtype=x.dtype)
-        if self.use_hc:
-            x = mix[0][None, None, None, :] * x + mix[1][None, None, None, :] * x0
-        else:
-            x = mix[0][None, None, :] * x + mix[1][None, None, :] * x0
+    def forward(self, x: Tensor, input_ids: Tensor) -> Tensor:
         if self.engram is not None:
             x = x + self.engram(x, input_ids)
-        if self.use_hc:
-            batch, seqlen, groups, dim = x.shape
-            attn_in = self.attn_norm(x.reshape(batch * groups, seqlen, dim))
-            attn_out = self.attn(attn_in).reshape(batch, seqlen, groups, dim)
-            x = x + self.attn_scale.to(dtype=x.dtype)[None, None, None, :] * attn_out
-            mlp_in = self.mlp_norm(x.reshape(batch * groups, seqlen, dim))
-            mlp_out = self.mlp(mlp_in).reshape(batch, seqlen, groups, dim)
-            x = x + self.mlp_scale.to(dtype=x.dtype)[None, None, None, :] * mlp_out
-        else:
-            attn_out = self.attn(self.attn_norm(x))
-            x = x + self.attn_scale.to(dtype=x.dtype)[None, None, :] * attn_out
-            x = x + self.mlp_scale.to(dtype=x.dtype)[None, None, :] * self.mlp(self.mlp_norm(x))
+        x = x + self.attn(self.attn_norm(x))
+        x = x + self.mlp(self.mlp_norm(x))
         return x
 
 
@@ -1031,10 +932,7 @@ class GPT(nn.Module):
         num_kv_heads: int,
         mlp_mult: int,
         tie_embeddings: bool,
-        tied_embed_init_std: float,
-        logit_softcap: float,
         rope_base: float,
-        qk_gain_init: float,
         engram_enabled: bool,
         engram_layer_ids: tuple[int, ...],
         engram_max_ngram: int,
@@ -1045,8 +943,6 @@ class GPT(nn.Module):
         engram_pad_id: int,
         seed: int,
         engram_use_tokenizer_compression: bool,
-        engram_use_hc: bool,
-        engram_hc_mult: int,
         engram_vocab_sizes: tuple[int, ...],
         engram_compression_lookup: Tensor | None = None,
         engram_compressed_vocab_size: int | None = None,
@@ -1055,13 +951,7 @@ class GPT(nn.Module):
         engram_soft_constraint_min: float = 0.1,
     ):
         super().__init__()
-        if logit_softcap <= 0.0:
-            raise ValueError(f"logit_softcap must be positive, got {logit_softcap}")
         self.tie_embeddings = tie_embeddings
-        self.tied_embed_init_std = tied_embed_init_std
-        self.logit_softcap = logit_softcap
-        self.engram_use_hc = engram_use_hc
-        self.engram_hc_mult = engram_hc_mult
         if engram_enabled:
             invalid_layer_ids = [layer_id for layer_id in engram_layer_ids if layer_id < 0 or layer_id >= num_layers]
             if invalid_layer_ids:
@@ -1112,10 +1002,6 @@ class GPT(nn.Module):
         else:
             engram_settings = None
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
-        self.num_encoder_layers = num_layers // 2
-        self.num_decoder_layers = num_layers - self.num_encoder_layers
-        self.num_skip_weights = min(self.num_encoder_layers, self.num_decoder_layers)
-        self.skip_weights = nn.Parameter(torch.ones(self.num_skip_weights, model_dim, dtype=torch.float32))
         self.blocks = nn.ModuleList(
             [
                 Block(
@@ -1125,9 +1011,6 @@ class GPT(nn.Module):
                     num_kv_heads,
                     mlp_mult,
                     rope_base,
-                    qk_gain_init,
-                    engram_use_hc,
-                    engram_hc_mult,
                     engram_settings,
                 )
                 for i in range(num_layers)
@@ -1135,55 +1018,24 @@ class GPT(nn.Module):
         )
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)
-        if self.lm_head is not None:
-            self.lm_head._zero_init = True
-        self._init_weights()
 
     def set_engram_step(self, step: int) -> None:
-        if not self.engram_use_hc and not any(block.engram is not None for block in self.blocks):
-            return
         for block in self.blocks:
             if block.engram is not None:
                 block.engram.set_step(step)
 
-    def _init_weights(self) -> None:
-        if self.tie_embeddings:
-            nn.init.normal_(self.tok_emb.weight, mean=0.0, std=self.tied_embed_init_std)
-        for module in self.modules():
-            if isinstance(module, nn.Linear) and getattr(module, "_zero_init", False):
-                nn.init.zeros_(module.weight)
-
     def forward(self, input_ids: Tensor, target_ids: Tensor) -> Tensor:
         x = self.tok_emb(input_ids)
-        x = F.rms_norm(x, (x.size(-1),))
-        if self.engram_use_hc:
-            x = x.unsqueeze(2).expand(-1, -1, self.engram_hc_mult, -1).contiguous()
-        x0 = x
-        skips: list[Tensor] = []
-
-        # First half stores skips; second half reuses them in reverse order.
-        for i in range(self.num_encoder_layers):
-            x = self.blocks[i](x, x0, input_ids)
-            skips.append(x)
-        for i in range(self.num_decoder_layers):
-            if skips:
-                if self.engram_use_hc:
-                    x = x + self.skip_weights[i].to(dtype=x.dtype)[None, None, None, :] * skips.pop()
-                else:
-                    x = x + self.skip_weights[i].to(dtype=x.dtype)[None, None, :] * skips.pop()
-            x = self.blocks[self.num_encoder_layers + i](x, x0, input_ids)
-
-        if self.engram_use_hc:
-            x = x[:, :, 0, :]
+        for block in self.blocks:
+            x = block(x, input_ids)
         x = self.final_norm(x).reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
         if self.tie_embeddings:
-            logits_proj = F.linear(x, self.tok_emb.weight)
+            logits = F.linear(x, self.tok_emb.weight)
         else:
             if self.lm_head is None:
                 raise RuntimeError("lm_head is required when tie_embeddings=False")
-            logits_proj = self.lm_head(x)
-        logits = self.logit_softcap * torch.tanh(logits_proj / self.logit_softcap)
+            logits = self.lm_head(x)
         return F.cross_entropy(logits.float(), targets, reduction="mean")
 
 
@@ -1312,10 +1164,7 @@ def main() -> None:
         num_kv_heads=args.num_kv_heads,
         mlp_mult=args.mlp_mult,
         tie_embeddings=args.tie_embeddings,
-        tied_embed_init_std=args.tied_embed_init_std,
-        logit_softcap=args.logit_softcap,
         rope_base=args.rope_base,
-        qk_gain_init=args.qk_gain_init,
         engram_enabled=args.engram_enabled,
         engram_layer_ids=parse_int_csv(args.engram_layer_ids),
         engram_max_ngram=args.engram_max_ngram,
@@ -1326,8 +1175,6 @@ def main() -> None:
         engram_pad_id=args.engram_pad_id,
         seed=args.seed,
         engram_use_tokenizer_compression=args.engram_use_tokenizer_compression,
-        engram_use_hc=args.engram_use_hc,
-        engram_hc_mult=args.engram_hc_mult,
         engram_vocab_sizes=parse_optional_int_csv(args.engram_vocab_sizes),
         engram_compression_lookup=engram_compression_lookup,
         engram_compressed_vocab_size=engram_compressed_vocab_size,
@@ -1346,7 +1193,7 @@ def main() -> None:
     # - token embedding (Adam) uses EMBED_LR
     # - untied lm_head (Adam) uses HEAD_LR
     # - matrix params in transformer blocks use MATRIX_LR via Muon
-    # - vectors/scalars plus Engram conv weights use SCALAR_LR via Adam
+    # - vectors/scalars use SCALAR_LR via Adam
     # - trick: Engram memory tables use a dedicated Adam LR so they do not flow through Muon
     block_named_params = list(base_model.blocks.named_parameters())
     engram_embedding_pattern = "engram.multi_head_embedding.embedding.weight"
@@ -1364,10 +1211,8 @@ def main() -> None:
     scalar_params = [
         p
         for name, p in block_named_params
-        if p.ndim != 2 or any(pattern in name for pattern in CONTROL_TENSOR_NAME_PATTERNS)
+        if p.ndim < 2 or any(pattern in name for pattern in CONTROL_TENSOR_NAME_PATTERNS)
     ]
-    if base_model.skip_weights.numel() > 0:
-        scalar_params.append(base_model.skip_weights)
     token_lr = args.tied_embed_lr if args.tie_embeddings else args.embed_lr
     optimizer_tok = torch.optim.Adam(
         [{"params": [base_model.tok_emb.weight], "lr": token_lr, "base_lr": token_lr}],
@@ -1418,8 +1263,6 @@ def main() -> None:
         f"enabled={int(args.engram_enabled)} "
         f"layers={args.engram_layer_ids} "
         f"params:{engram_params} "
-        f"use_hc={int(args.engram_use_hc)} "
-        f"hc_mult={args.engram_hc_mult} "
         f"compression={int(args.engram_use_tokenizer_compression)} "
         f"compressed_vocab_size:{engram_compressed_vocab_size if engram_compressed_vocab_size is not None else args.vocab_size} "
         f"engram_warmup_steps:{args.engram_warmup_steps} "
@@ -1493,11 +1336,11 @@ def main() -> None:
 
     train_loader = DistributedTokenLoader(args.train_files, rank, world_size, device)
 
+    max_wallclock_ms = 1000.0 * args.max_wallclock_seconds if args.max_wallclock_seconds > 0 else None
+
     def zero_grad_all() -> None:
         for opt in optimizers:
             opt.zero_grad(set_to_none=True)
-
-    max_wallclock_ms = 1000.0 * args.max_wallclock_seconds if args.max_wallclock_seconds > 0 else None
 
     def lr_mul(step: int, elapsed_ms: float) -> float:
         if args.warmdown_iters <= 0:
@@ -1649,7 +1492,7 @@ def main() -> None:
                 step=step,
             )
 
-        # Needed to sync whether we've reached the wallclock cap.
+        # Check wallclock cap
         reached_cap = max_wallclock_ms is not None and approx_training_time_ms >= max_wallclock_ms
         if distributed and max_wallclock_ms is not None:
             reached_cap_tensor = torch.tensor(int(reached_cap), device=device)
@@ -1677,7 +1520,6 @@ def main() -> None:
     # -----------------------------
     # SERIALIZATION + FINAL EVALUATION
     # -----------------------------
-    # Save the raw bf16 model, then evaluate directly without quantization.
 
     if master_process:
         model_path = os.path.join(args.output_dir, "final_model.pt")
@@ -1766,14 +1608,8 @@ def main() -> None:
                 "engram_enabled": bool(args.engram_enabled),
                 "engram_layer_ids": list(parse_int_csv(args.engram_layer_ids)),
                 "engram_params": int(engram_params),
-                "engram_use_hc": bool(args.engram_use_hc),
-                "engram_hc_mult": int(args.engram_hc_mult),
-                "engram_use_tokenizer_compression": bool(
-                    args.engram_use_tokenizer_compression
-                ),
-                "engram_compressed_vocab_size": int(
-                    engram_compressed_vocab_size or args.vocab_size
-                ),
+                "engram_use_tokenizer_compression": bool(args.engram_use_tokenizer_compression),
+                "engram_compressed_vocab_size": int(engram_compressed_vocab_size or args.vocab_size),
                 "engram_vocab_sizes": list(parse_optional_int_csv(args.engram_vocab_sizes)),
             },
             "training": {
