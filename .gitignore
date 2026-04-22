@@ -28,3 +28,4 @@ wandb/
 .inspire/
 .pipeline/
 exp/**/final_model*.pt
+core.*
