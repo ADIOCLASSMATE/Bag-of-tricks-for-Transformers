@@ -16,7 +16,6 @@
         "enable_wandb": 1,
         "wandb_mode": "offline",
         "wandb_project": "bag-of-tricks-for-transformers",
-        "wandb_api_key": "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",
         "num_layers": 9,
         "model_dim": 512,
         "num_heads": 8,
