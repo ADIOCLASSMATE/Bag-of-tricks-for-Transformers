@@ -15,7 +15,7 @@ echo "=== Syncing wandb runs ==="
 for run_dir in "$PROJECT_DIR"/wandb/offline-run-*; do
     if [ -d "$run_dir" ]; then
         echo "Syncing $run_dir ..."
-        uv run wandb sync "$run_dir" --timeout 120 || echo "Warning: failed to sync $run_dir"
+        timeout 120 uv run wandb sync "$run_dir" || echo "Warning: failed to sync $run_dir"
     fi
 done
 echo "=== Done ==="
