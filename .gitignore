@@ -24,7 +24,6 @@ data/docs_selected.jsonl
 final_model*.pt
 final_model*.ptz
 .cache
-wandb/
 .inspire/
 .pipeline/
 exp/**/final_model*.pt

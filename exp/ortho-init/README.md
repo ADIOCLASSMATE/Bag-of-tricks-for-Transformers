@@ -1,65 +1,59 @@
-# Ortho-Init — Orthogonal Initialization for All Non-Zero-Init Linear Layers
+# Ortho-Init — Orthogonal Initialization for All Linear Layers
 
 ## Method Overview
 
-This experiment applies `nn.init.orthogonal_` to **every non-zero-init linear weight matrix** while preserving the baseline zero-initialization of layers marked with `_zero_init=True`.
+This experiment applies `nn.init.orthogonal_` to **every linear weight matrix** in the model, replacing PyTorch's default Kaiming uniform initialization with orthogonal initialization.
 
-In this codebase, that means the attention output projection and MLP output projection remain zero-initialized exactly as in the baseline, while the other linear maps switch from the default PyTorch init to orthogonal init. This matches the earlier standalone parameter-golf OrthoInit formulation more closely than later stacked variants that also rescaled projection weights.
+All linear layers — including attention and MLP projections — switch from default PyTorch init to orthogonal init. This matches the earlier standalone parameter-golf OrthoInit formulation more closely than later stacked variants that also rescaled projection weights.
 
 ### Origin
 
-From **parameter-golf T07 OrthoInit**. The source-faithful standalone formulation initializes all non-zero-init linear layers with `nn.init.orthogonal_()` and leaves `_zero_init` layers unchanged.
+From **parameter-golf T07 OrthoInit**. The source-faithful standalone formulation initializes all linear layers with `nn.init.orthogonal_()`.
 
 ### Motivation
 
 - Orthogonal weights preserve directional structure better than generic random initializations
 - The change targets only linear layer initialization, not runtime computation
-- Preserving `_zero_init` output projections avoids conflating orthogonal init with a separate residual-output initialization ablation
+- Replacing default init with orthogonal init isolates the effect of initialization geometry alone
 
 ## Impact on Training
 
 - **Parameters**: No change
 - **Throughput**: No measurable runtime impact after initialization
 - **Memory**: No change
-- **Optimization**: All non-zero-init linear maps start orthogonal, while residual output projections preserve baseline zero-init behavior
+- **Optimization**: All linear maps start orthogonal instead of using PyTorch's default Kaiming uniform init
 
 ## Key Differences from Baseline
 
-| Component | baseline-sp1024 | ortho-init |
+| Component | Baseline | ortho-init |
 |---|---|---|
-| Non-zero-init linear init | default PyTorch init | **orthogonal** |
-| `_zero_init=True` projections | zero init | zero init |
+| Linear weight init | default PyTorch init (Kaiming uniform) | **orthogonal** |
 | Runtime graph | unchanged | unchanged |
 | Everything else | identical | identical |
 
 ## Results
 
-> Results will be filled in after running the experiment.
+| Regime | Metric | Baseline | Ortho-Init | Delta |
+|---|---|---|---|---|
+| Fixed Compute (10 min) | Val BPB | 1.2979 | 1.2995 | +0.0016 |
+| Fixed Compute (10 min) | Val Loss | 2.1914 | 2.1942 | +0.0028 |
+| Fixed Compute (10 min) | Train Tokens | 7.67B | 7.64B | -0.4% |
+| Fixed Compute (10 min) | Peak Memory | 8,389 MiB | 8,389 MiB | 0 |
+| Fixed Tokens (10B) | Val BPB | 1.2857 | 1.2886 | +0.0029 |
+| Fixed Tokens (10B) | Val Loss | 2.1709 | 2.1757 | +0.0048 |
+| Fixed Tokens (10B) | Wall-clock | 772s | 775s | +0.4% |
+| — | Total Params | 17.04M | 17.04M | 0 |
 
-### Fixed Compute (10 min wall-clock)
+## Analysis
 
-| Metric | baseline-sp1024 | ortho-init | Δ |
-|---|---|---|---|
-| **Val BPB** | 1.2194 | — | — |
-| Val Loss | 2.0589 | — | — |
+Orthogonal initialization degrades validation BPB by +0.0016 (fixed compute) and +0.0029 (fixed tokens), a consistent though small regression across both evaluation regimes.
 
-### Fixed Tokens (10B tokens)
+The baseline already incorporates QK-Norm, RMSNorm, and the Muon optimizer, each of which normalizes gradient flow during training. Orthogonal initialization aims to improve conditioning at the start of training, but these runtime normalization mechanisms largely subsume that benefit. The default Kaiming uniform initialization already provides adequate initial conditioning for this architecture, and orthogonal init offers no additional advantage.
 
-| Metric | baseline-sp1024 | ortho-init | Δ |
-|---|---|---|---|
-| **Val BPB** | 1.2118 | — | — |
-| Val Loss | 2.0460 | — | — |
-
-## BPB Analysis
-
-> To be completed after experiments.
-
-- **If BPB improves**: The orthogonal weights likely gave the network a better-conditioned starting point for learning useful representations.
-- **If BPB is unchanged**: Initialization geometry may not be a major bottleneck at this scale, especially with the baseline's existing normalization and optimizer setup.
-- **If BPB worsens**: Orthogonal init may be mismatched with the rest of the baseline recipe, or the retained zero-init output projections may dominate the effective early dynamics.
+The method is parameter-free and adds no runtime cost, but offers no advantage at this scale. Orthogonal initialization is **near-neutral to slightly harmful** when strong normalization is already present.
 
 ## Files
 
-- `train_gpt.py`: Baseline trainer with source-faithful orthogonal init for all non-`_zero_init` linear layers
+- `train_gpt.py`: Baseline trainer with orthogonal init for all linear weight matrices
 - `ortho-init.json`: Experiment manifest
 - `logs/`: Training output (automatically generated)

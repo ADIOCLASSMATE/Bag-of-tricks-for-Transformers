@@ -39,84 +39,57 @@ The "proportional" aspect means the frequency computation uses the **full head_d
 
 ## Results
 
-### seq_len=1024
+| Seq Len | Regime | Metric | Baseline | Dual RoPE | Delta |
+|---|---|---|---|---|---|
+| 1024 | Fixed Compute | Val Loss | 2.1914 | 2.1887 | -0.0027 |
+| 1024 | Fixed Compute | Val BPB | 1.2979 | 1.2962 | -0.0017 |
+| 1024 | Fixed Compute | Train Tokens | 7.67B | 7.63B | -0.5% |
+| 1024 | Fixed Compute | Peak Memory | 8,389 MiB | 8,389 MiB | 0 |
+| 1024 | Fixed Tokens | Val Loss | 2.1709 | 2.1688 | -0.0021 |
+| 1024 | Fixed Tokens | Val BPB | 1.2857 | 1.2845 | -0.0012 |
+| 1024 | Fixed Tokens | Wall-clock | 772s | 770s | -0.3% |
+| 2048 | Fixed Compute | Val Loss | 2.1781 | 2.1728 | -0.0053 |
+| 2048 | Fixed Compute | Val BPB | 1.2900 | 1.2868 | -0.0032 |
+| 2048 | Fixed Compute | Train Tokens | 6.40B | 6.43B | +0.5% |
+| 2048 | Fixed Compute | Peak Memory | 8,390 MiB | 8,389 MiB | -1 MiB |
+| 2048 | Fixed Tokens | Val Loss | 2.1461 | 2.1466 | +0.0005 |
+| 2048 | Fixed Tokens | Val BPB | 1.2711 | 1.2714 | +0.0003 |
+| 2048 | Fixed Tokens | Wall-clock | 924s | 920s | -0.4% |
+| 4096 | Fixed Compute | Val Loss | 2.1752 | 2.1899 | +0.0147 |
+| 4096 | Fixed Compute | Val BPB | 1.2883 | 1.2970 | +0.0087 |
+| 4096 | Fixed Compute | Train Tokens | 4.91B | 4.93B | +0.4% |
+| 4096 | Fixed Compute | Peak Memory | 8,392 MiB | 8,391 MiB | -1 MiB |
+| 4096 | Fixed Tokens | Val Loss | 2.1306 | 2.1322 | +0.0016 |
+| 4096 | Fixed Tokens | Val BPB | 1.2618 | 1.2628 | +0.0010 |
+| 4096 | Fixed Tokens | Wall-clock | 1,209s | 1,202s | -0.6% |
 
-| Regime | Metric | Baseline | Dual RoPE | Delta |
-|---|---|---|---|---|
-| Fixed Compute (10 min) | Val BPB | 1.2194 | 1.2203 | +0.0009 |
-| Fixed Compute (10 min) | Train Tokens | 6.954B | 6.953B | ~0 |
-| Fixed Compute (10 min) | Peak Memory | 10,246 MiB | 10,246 MiB | 0 |
-| Fixed Tokens (10B) | Val BPB | 1.2118 | 1.2121 | +0.0003 |
-| Fixed Tokens (10B) | Wall-clock | 832.8s | 848.4s | +1.9% |
-| — | Total Params | 17.06M | 17.06M | 0 |
-
-### seq_len=2048
-
-| Regime | Metric | Baseline (seq1024) | Dual RoPE (seq2048) | Delta |
-|---|---|---|---|---|
-| Fixed Compute (10 min) | Val BPB | 1.2194 | 1.2045 | **-0.0149** |
-| Fixed Compute (10 min) | Train Tokens | 6.954B | 5.899B | -15.2% |
-| Fixed Compute (10 min) | Peak Memory | 10,246 MiB | 10,246 MiB | 0 |
-| Fixed Tokens (10B) | Val BPB | 1.2118 | 1.1929 | **-0.0189** |
-| Fixed Tokens (10B) | Wall-clock | 832.8s | 1,000.4s | +20.2% |
-| — | Total Params | 17.06M | 17.06M | 0 |
-
-Note: The seq2048 comparison uses the seq1024 baseline. A proper seq2048 baseline would provide a more direct comparison, but the large improvement suggests dual RoPE benefits from longer sequences as designed.
-
-### seq_len=4096
-
-| Regime | Metric | Baseline (seq1024) | Dual RoPE (seq4096) | Delta |
-|---|---|---|---|---|
-| Fixed Compute (10 min) | Val BPB | 1.2194 | 1.2010 | **-0.0184** |
-| Fixed Compute (10 min) | Train Tokens | 6.954B | 4.586B | -34.1% |
-| Fixed Compute (10 min) | Peak Memory | 10,246 MiB | 10,248 MiB | +2 MiB |
-| Fixed Tokens (10B) | Val BPB | 1.2118 | 1.1816 | **-0.0302** |
-| Fixed Tokens (10B) | Wall-clock | 832.8s | 1,290.6s | +55.0% |
-| — | Total Params | 17.06M | 17.06M | 0 |
+Model size: 17,039,360 params (identical to baseline — no added parameters).
 
 ## Analysis
 
-### seq_len=1024: Neutral
+### Mechanism
 
-At seq_len=1024, Dual RoPE is **essentially neutral** — the BPB deltas are +0.0009 (fixed-compute) and +0.0003 (fixed-tokens), both within the noise margin of a single training run.
+Dual RoPE assigns different positional encoding configurations to different layers: every third layer ("global") receives θ=1M with only 25% of head dimensions rotated, while the remaining layers ("sliding") keep standard θ=10K with full rotation. The design intent is twofold: (1) global layers gain long-range positional discrimination from the large θ, and (2) the 75% unrotated dimensions preserve a position-free subspace for content-based attention. Crucially, this ablation applies only the RoPE change — all layers still use full causal attention, so the sliding/global distinction is purely in the positional encoding, not the attention pattern.
 
-**Why dual RoPE has no effect at short sequences**: The dual RoPE design assigns θ=1M with 25% partial rotation to "global" layers and θ=10K with 100% rotation to "sliding" layers. However, in this ablation, all layers still use **full causal attention** — the sliding/global distinction only affects the RoPE configuration, not the attention pattern. At seq_len=1024, the position range is short enough that even θ=10K provides adequate positional discrimination across the full sequence. The θ=1M configuration with partial rotation was designed for sequences of 8K–32K+ tokens, where the standard θ=10K RoPE suffers from excessive angular overlap at distant positions. At 1024 tokens, both configurations effectively provide the same positional information quality.
+### Scaling behavior
 
-### seq_len=2048: Significant Improvement
+The effect of dual RoPE is mixed and ultimately negative at longer sequences. Under fixed-compute, the improvement grows from 0.0017 BPB at 1024 tokens to 0.0032 at 2048 tokens, but under fixed-tokens the 2048 improvement is near-zero (+0.0003), and at 4096 the method regresses under both regimes (+0.0087 fixed-compute, +0.0010 fixed-tokens). The growing fixed-compute benefit at 2048 is misleading — it reflects fewer training steps due to longer sequences rather than better per-token learning. The fixed-tokens regime, which equalizes data seen, tells the clearer story: the benefit vanishes by 2048 and turns negative by 4096. This is the opposite of the intended scaling: if the large-θ global layers provided useful long-range positional signals, the benefit should grow with sequence length.
 
-At seq_len=2048, Dual RoPE shows a **substantial improvement** of -0.015 BPB (fixed-compute) and -0.019 BPB (fixed-tokens). This is a dramatic shift from the neutral result at seq_len=1024.
+### Why partial rotation hurts under full causal attention
 
-**Why dual RoPE helps at longer sequences**: At 2048 tokens, the positional encoding capacity of θ=10K starts to show strain — the angular separation between distant positions becomes small enough that the model struggles to distinguish them precisely. The dual RoPE configuration addresses this in two ways:
+The regression at longer sequences reveals a fundamental mismatch between partial RoPE and full causal attention. When 75% of head dimensions carry no positional encoding, the "global" layers lose fine-grained positional discrimination in most of their attention subspace. Under full causal attention, every layer must handle both local and long-range dependencies — there are no dedicated sliding-window layers to compensate for the lost local precision. Standard RoPE with θ=10K and 100% rotation provides consistent positional signals across all dimensions, which proves more valuable than the coarse long-range signal from θ=1M in a quarter of dimensions.
 
-1. **Long-range resolution via θ=1M**: Global layers with θ=1M maintain meaningful angular separation across the full 2048-token range, where θ=10K would have increasing positional ambiguity at distant positions.
+### Complementarity with hybrid attention
 
-2. **Content-position disentanglement**: The 75% unrotated dimensions in global layers preserve a large subspace for purely content-based attention. At longer sequences where positional interference becomes more significant (the rotational patterns overlap more across positions), freeing up 75% of dimensions from positional encoding allows the model to maintain cleaner content-based similarity signals.
+In the full Gemma 4 design, dual RoPE is paired with a hybrid sliding-window attention pattern: sliding-window layers with full RoPE handle local precision, while global layers with partial RoPE handle long-range dependencies. This ablation isolates the RoPE change and shows that partial rotation is actively harmful when global layers must also perform precise local attention. The method likely requires the complementary attention pattern to be beneficial — the partial rotation is a feature only when the layer's attention is restricted to long-range interactions.
 
-### seq_len=4096: Even Stronger Improvement
+### Overhead
 
-At seq_len=4096, the trend accelerates — Dual RoPE achieves -0.018 BPB (fixed-compute) and a remarkable **-0.030 BPB (fixed-tokens)**. The fixed-tokens improvement is now comparable to GeGLU (-0.021), making Dual RoPE one of the strongest tricks at longer sequences.
+Dual RoPE adds zero parameters and negligible runtime overhead across all sequence lengths. Wall-clock differences are within 1% of the baseline, confirming that changing RoPE frequencies does not affect the dominant attention matmul cost. The method is computationally free but provides no standalone benefit.
 
-**Scaling trend is clear**: The improvement grows monotonically with sequence length: +0.001 (seq1024) → -0.015 (seq2048) → -0.018 (seq4096) under fixed-compute, and +0.000 (seq1024) → -0.019 (seq2048) → -0.030 (seq4096) under fixed-tokens. This confirms that dual RoPE's benefit is directly tied to the positional encoding bottleneck that standard RoPE encounters at longer sequences.
+### Verdict
 
-**The 75% unrotated dimensions are the key**: At 4096 tokens, the positional rotation patterns in standard RoPE (θ=10K, 100% rotation) create significant interference across head dimensions — different positions produce similar rotation patterns, making it harder for the model to distinguish content from position. By leaving 75% of dimensions unrotated in global layers, the model retains a large, clean subspace for content-based attention that is unaffected by the increasing positional ambiguity at long ranges.
-
-**Compute trade-off under fixed-compute**: At seq4096, the model processes only 4.59B tokens (vs. 6.95B baseline) — a 34.1% reduction due to the O(n²) attention cost at longer sequences. Despite seeing far fewer tokens, the per-token quality improvement is large enough to more than compensate. The 55% wall-clock increase under fixed-tokens reflects the same attention cost scaling, not a RoPE overhead.
-
-**Caveat**: The comparison is against the seq1024 baseline. A seq4096 baseline with standard RoPE would provide the fairest comparison, but the monotonic improvement trend across sequence lengths strongly suggests the dual RoPE effect is genuine and not merely an artifact of longer context.
-
-**Caveat**: The comparison is against the seq1024 baseline rather than a seq2048 baseline. The improvement likely combines two effects: (a) genuine dual RoPE benefit at longer sequences, and (b) the model seeing more context per training example at seq2048. A seq2048 baseline with standard RoPE would disentangle these, but the magnitude of the improvement (-0.015 to -0.019) suggests the dual RoPE effect is real.
-
-### Throughput and Memory
-
-The trick adds zero parameters and zero peak memory overhead at all sequence lengths. The wall-clock overhead in fixed-tokens grows from 1.9% (seq1024) to 20.2% (seq2048), which reflects the O(n²) attention cost doubling — not a RoPE overhead. The per-step compute is identical since RoPE configuration changes only affect the frequency/rotation computation, which is negligible relative to the attention matmuls.
-
-### Complementarity note
-
-Dual RoPE is designed to work in conjunction with hybrid sliding-window attention — global layers with partial RoPE handle long-range dependencies while sliding layers with full RoPE focus on local precision. Testing dual RoPE in isolation, without the corresponding attention pattern change, may underestimate its potential. The partial rotation in global layers makes the most sense when those layers are specifically responsible for integrating information across the full sequence, which is the intended design in Gemma 4.
-
-### Conclusion
-
-Dual RoPE is **strongly sequence-length-dependent**: neutral at seq_len=1024, substantially beneficial at seq_len=2048, and even stronger at seq_len=4096. The improvement scales monotonically with sequence length, confirming that the trick addresses a real positional encoding bottleneck that emerges at longer sequences. At seq4096 with fixed tokens, the -0.030 BPB improvement makes Dual RoPE one of the most effective architectural modifications tested, rivaling GeGLU (-0.021) — and unlike GeGLU, it adds zero parameters. The trick is essentially free computationally (only RoPE frequency changes) and its value increases with sequence length, making it an excellent choice for models targeting long-context applications.
+**Not beneficial in isolation.** Dual RoPE slightly helps at short sequences but regresses at longer ones, contradicting its design intent. The partial rotation in global layers removes positional information that full causal attention needs. The method's value depends on pairing with hybrid sliding-window attention — without that, it is at best neutral and at worst slightly harmful.
 
 ## Files
 

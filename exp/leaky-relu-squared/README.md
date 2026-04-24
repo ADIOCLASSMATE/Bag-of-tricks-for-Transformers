@@ -2,51 +2,51 @@
 
 ## Method Overview
 
-This experiment replaces the baseline MLP activation `relu(x).square()` with **`leaky_relu(x, 0.5).square()`**.
+This experiment replaces the baseline MLP activation `F.gelu(x)` with **`leaky_relu(x, 0.5).square()`**.
 
-The goal is to preserve negative-side gradient flow through the MLP while keeping the same overall relu²-style nonlinearity pattern.
+The goal is to test whether a quadratic activation that grows on both sides of zero provides stronger gradient signal for large activations compared to GELU's approximately linear regime.
 
 ## Impact on Training
 
 - **Parameters**: No change
 - **Throughput**: Essentially unchanged
-- **Peak memory**: unchanged at 10,246 MiB
-- **Optimization**: Eliminates hard zero gradient on negative pre-activations
+- **Peak memory**: unchanged at 8,389 MiB
+- **Optimization**: Quadratic growth on both sides provides stronger gradient signal for large activations vs. GELU's near-linear regime
 
 ## Key Differences from Baseline
 
-| Component | baseline-sp1024 | leaky-relu-squared |
+| Component | Baseline | leaky-relu-squared |
 |---|---|---|
-| MLP activation | `relu(x).square()` | **`leaky_relu(x, 0.5).square()`** |
+| MLP activation | `F.gelu(x)` | **`leaky_relu(x, 0.5).square()`** |
 | Everything else | identical | identical |
 
 ## Results
 
+**Parameters**: 17.04M (identical to baseline)
+
 ### Fixed Compute (10 min wall-clock)
 
-| Metric | baseline-sp1024 | leaky-relu-squared | Δ |
+| Metric | Baseline | leaky-relu-squared | Δ |
 |---|---|---|---|
-| **Val BPB** | 1.2194 | **1.2173** | **−0.0021** |
-| Val Loss | 2.0589 | **2.0554** | **−0.0035** |
-| Steps completed | 13,263 | 13,295 | +32 |
-| Tokens processed | 6.95B | 6.97B | +0.02B |
+| **Val BPB** | 1.2979 | **1.2755** | **−0.0224** |
+| Val Loss | 2.1914 | **2.1536** | **−0.0378** |
+| Tokens processed | 7.67B | 7.61B | −0.8% |
+| Peak Memory | 8,389 MiB | 8,389 MiB | 0 |
 
 ### Fixed Tokens (10B tokens)
 
-| Metric | baseline-sp1024 | leaky-relu-squared | Δ |
+| Metric | Baseline | leaky-relu-squared | Δ |
 |---|---|---|---|
-| **Val BPB** | 1.2118 | **1.2097** | **−0.0021** |
-| Val Loss | 2.0460 | **2.0425** | **−0.0035** |
-| Steps | 19,074 | 19,074 | 0 |
-| Wall-clock time | 832.8s | 843.4s | +10.6s |
+| **Val BPB** | 1.2857 | **1.2654** | **−0.0203** |
+| Val Loss | 2.1709 | **2.1366** | **−0.0343** |
+| Wall-clock time | 772s | 780s | +1.0% |
+| Peak Memory | 8,389 MiB | 8,389 MiB | 0 |
 
-## BPB Analysis
+## Analysis
 
-This is a clean, low-cost win.
+Leaky-ReLU-squared is a consistent, zero-cost improvement over the GELU baseline. By applying `leaky_relu(x, 0.5).square()`, the activation grows quadratically on both sides of zero, providing stronger gradient signal for large activations compared to GELU's approximately linear regime near and beyond zero. GELU already provides non-zero gradient for negative inputs, so the advantage here is not about eliminating dead zones but about the quadratic scaling that amplifies gradients for larger pre-activations, potentially leading to more expressive feature transformations.
 
-- **Fixed compute**: The model improves by 0.0021 BPB with essentially identical throughput.
-- **Fixed tokens**: The same 0.0021 BPB gain appears again, which makes the result look robust rather than noise.
-- **Interpretation**: The activation change is small, cheap, and consistently helpful. It is weaker than large capacity changes, but much cheaper to adopt.
+Both evaluation regimes tell the same story: a ~0.02 BPB gain that is robust to the compute-vs-tokens tradeoff. Throughput and memory are unaffected.
 
 ## Files
 

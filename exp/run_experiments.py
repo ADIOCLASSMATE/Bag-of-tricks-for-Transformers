@@ -76,6 +76,10 @@ ENV_KEY_MAP = {
     "per_layer_embed_scale": "PER_LAYER_EMBED_SCALE",
     "num_kv_shared_layers": "NUM_KV_SHARED_LAYERS",
     "use_double_wide_mlp": "USE_DOUBLE_WIDE_MLP",
+    # Loop experiment hyperparameters
+    "num_loop_layers": "NUM_LOOP_LAYERS",
+    "num_loop_repeats": "NUM_LOOP_REPEATS",
+    "num_unique_encoder": "NUM_UNIQUE_ENCODER",
 }
 
 MODEL_KEYS = ("num_layers", "model_dim", "num_heads", "num_kv_heads", "mlp_mult", "vocab_size")

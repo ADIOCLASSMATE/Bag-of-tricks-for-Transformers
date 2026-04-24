@@ -22,7 +22,7 @@ size `rope_dims / 2` and `apply_rotary_emb` auto-detects the partial mode via
 
 Setting `rope_dims = 0` (the default) restores the full-RoPE baseline
 bit-exactly — `Rotary` caches `head_dim / 2` cos/sin entries and
-`apply_rotary_emb` takes the else branch, identical to `exp/baseline-sp1024`.
+`apply_rotary_emb` takes the else branch, identical to `exp/Baseline`.
 
 **Constraint.** `rope_dims` must be even and `≤ head_dim`.
 
@@ -48,7 +48,7 @@ parameter-golf record) and differ only in the control regime:
 
 ## Key differences from baseline
 
-| Parameter | baseline-sp1024 | partial-rope |
+| Parameter | Baseline | partial-rope |
 |---|---|---|
 | `rope_dims` | N/A (rotates full 64 dims) | 16 (rotates only first 16 of 64) |
 | Rotary cos/sin cache size | `head_dim / 2 = 32` | `rope_dims / 2 = 8` |
@@ -57,6 +57,8 @@ parameter-golf record) and differ only in the control regime:
 | Memory | (unchanged) | **unchanged** (smaller cos/sin cache is negligible) |
 | Compute | (unchanged) | slightly **less** (~75 % fewer rotation mul/adds) |
 | All other hyperparameters | (identical) | (identical) |
+
+**Note:** The `apply_rotary_emb` implementation also removes the `.clone()` calls present in the baseline's slice operations. In the baseline, `x1, x2 = x[..., :half].clone(), x[..., half:].clone()` defensively copies the sliced tensors; in partial-rope, the slices are consumed immediately by the rotation arithmetic, making the clones redundant. This is a minor code cleanup that does not affect numerical results.
 
 ## Origin
 
@@ -84,25 +86,37 @@ parameter-golf record) and differ only in the control regime:
 
 ## Results
 
-### Fixed Compute (10 min wall-clock)
+Parameter count is unchanged at 17,039,360.
 
-| Metric | baseline-sp1024 | partial-rope-16 |
-|---|---|---|
-| **Val BPB** | 1.2194 | TBD |
-| Val Loss   | 2.0589 | TBD |
+### Fixed Compute (600 s wall-clock)
+
+| Metric | Baseline | partial-rope-16 | Delta |
+|---|---|---|---|
+| **Val BPB** | 1.2979 | 1.3011 | +0.0032 |
+| Val Loss | 2.1914 | 2.1968 | +0.0054 |
+| Train Tokens | 7.67 B | 7.78 B | +1.4 % |
+| Peak Memory | 8 389 MiB | 8 388 MiB | −1 MiB |
 
 ### Fixed Tokens (10 B tokens)
 
-| Metric | baseline-sp1024 | partial-rope-16 |
-|---|---|---|
-| **Val BPB** | 1.2118 | TBD |
-| Val Loss   | 2.0460 | TBD |
+| Metric | Baseline | partial-rope-16 | Delta |
+|---|---|---|---|
+| **Val BPB** | 1.2857 | 1.2921 | +0.0064 |
+| Val Loss | 2.1709 | 2.1817 | +0.0108 |
+| Wall-clock | 772 s | 757 s | −1.9 % |
+| Peak Memory | 8 389 MiB | 8 388 MiB | −1 MiB |
 
 ## Analysis
 
-TBD after experiments complete. If 25 % looks good we can follow up with a
-ratio sweep (e.g. `rope_dims ∈ {8, 32, 48}`) to locate the sweet spot for
-this architecture (head_dim = 64, 9 layers, 512 model_dim).
+Partial RoPE with 25 % rotation (16 / 64 dims) yields a **small regression** under both control regimes: +0.0032 BPB fixed-compute, +0.0064 BPB fixed-tokens.
+
+Rotating only 16 of 64 head dimensions frees the remaining 48 dimensions to encode position-invariant content, but at `seq_len = 1024` the loss of positional discrimination across most of the head space outweighs that benefit. Full positional information across all dimensions remains valuable at this sequence length; the position-invariant subspace does not compensate.
+
+The slight throughput gain (1.9 % faster wall-clock, 1.4 % more tokens) from reduced rotation arithmetic is too small to close the quality gap.
+
+This outcome diverges from the parameter-golf record where partial RoPE improved BPB. That record stacked partial RoPE with LN Scale and other complementary changes; in isolation, partial RoPE may require longer sequence lengths or companion architectural modifications to show a net benefit.
+
+A sweep over `rope_dims in {8, 32, 48}` could identify a better operating point for this architecture (9 layers, 512 model dim, head dim 64).
 
 ## Files
 

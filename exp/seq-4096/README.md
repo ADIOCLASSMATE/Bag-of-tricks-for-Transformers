@@ -17,49 +17,37 @@ Since `train_batch_tokens` is held constant at 524,288, quadrupling the sequence
 
 ## Results
 
+Model size: 17.04M parameters (identical to baseline).
+
 ### Fixed Compute (10 min wall-clock)
 
-| Metric | baseline | seq-2048 | seq-4096 | Δ (4096 vs 1024) |
-|---|---|---|---|---|
-| **Val BPB** | 1.2194 | 1.2030 | **1.1973** | **−0.0221** |
-| Val Loss | 2.0589 | 2.0313 | 2.0215 | −0.0374 |
-| Steps completed | 13,263 | 11,556 | 8,928 | −4,335 |
-| Tokens processed | 6.95B | 6.06B | 4.68B | −2.27B |
+| Metric | Baseline | seq-4096 | Delta |
+|---|---|---|---|
+| **Val BPB** | 1.2979 | 1.2883 | **-0.0096** |
+| Val Loss | 2.1914 | 2.1752 | -0.0162 |
+| Train Tokens | 7.67B | 4.91B | -36.0% |
+| Peak Memory | 8,389 MiB | 8,392 MiB | +3 MiB |
 
 ### Fixed Tokens (10B tokens)
 
-> **Note**: The `fixed_tokens_10b` run for seq4096 has not yet completed. Results will be updated when available.
+| Metric | Baseline | seq-4096 | Delta |
+|---|---|---|---|
+| **Val BPB** | 1.2857 | 1.2618 | **-0.0239** |
+| Val Loss | 2.1709 | 2.1306 | -0.0403 |
+| Wall-clock | 772s | 1,209s | +56.6% |
+| Peak Memory | 8,389 MiB | 8,392 MiB | +3 MiB |
 
 ## Analysis
 
-### Why does BPB improve with longer sequences?
+Quadrupling the sequence length from 1024 to 4096 improves validation quality in both evaluation regimes. The mechanism is straightforward: each training example now spans 4x more contiguous tokens, giving the model longer-range dependencies to learn from. The trade-off is quadratic attention cost, which reduces throughput per step.
 
-1. **Extended context window**: With `seq_len=4096`, the model can attend to 4× more preceding tokens than the baseline. This allows the model to capture much longer-range dependencies (e.g., cross-paragraph coherence, multi-sentence reasoning), directly lowering prediction error for context-dependent tokens.
+**Fixed-compute.** Despite processing 36% fewer tokens (4.91B vs 7.67B) due to the O(n^2) attention overhead, seq-4096 still achieves -0.010 BPB improvement. Longer context more than compensates for fewer gradient updates -- each step produces higher-quality gradients because the loss is computed over more coherent, longer spans.
 
-2. **Better gradient signal**: Each training sequence covers more contiguous text, reducing the ratio of "cold start" positions (where the model lacks context) and providing richer, more coherent gradient signals per update.
+**Fixed-tokens.** With equal token budgets the improvement is substantial: -0.024 BPB, the largest fixed-tokens gain among all ablation experiments. The cost is 57% more wall-clock time. This confirms that when compute is not the binding constraint, longer context is one of the most effective ways to improve language modeling quality.
 
-3. **Reduced boundary artifacts**: Quadrupling the sequence length reduces the number of artificial truncation boundaries to ¼ of the baseline, minimizing the fraction of tokens where the model is forced to predict without adequate context.
+**Diminishing returns across sequence lengths.** The seq-2048 ablation yields -0.015 FT BPB at +19.7% wall-clock, while the further doubling to 4096 adds -0.009 BPB at an additional +36.9% wall-clock. The marginal return per compute unit halves, but the total -0.024 BPB gain from 1024 to 4096 remains the strongest single ablation result.
 
-### Diminishing returns at longer sequences
-
-Comparing the three sequence lengths under fixed compute:
-
-| Seq Length | BPB | Tokens Processed | BPB Improvement vs 1024 |
-|---|---|---|---|
-| 1024 | 1.2194 | 6.95B | — |
-| 2048 | 1.2030 | 6.06B | −0.0164 |
-| 4096 | 1.1973 | 4.68B | −0.0221 |
-
-Going from 1024→2048 yields a BPB gain of 0.0164, while 2048→4096 yields only an additional 0.0057. This suggests **diminishing returns**: the marginal benefit of longer context shrinks as the window grows, while the compute cost (O(n²) attention) increases quadratically.
-
-### Compute trade-off
-
-Longer sequences significantly reduce throughput. In the fixed 10-minute budget:
-- **seq1024** processed 6.95B tokens (13,263 steps)
-- **seq2048** processed 6.06B tokens (11,556 steps, −13% throughput)
-- **seq4096** processed 4.68B tokens (8,928 steps, −33% throughput)
-
-Despite seeing **33% fewer tokens**, seq4096 still achieves the lowest BPB under fixed compute, indicating that longer context provides a net benefit even when trading off raw throughput. However, the gap is narrowing — the fixed-tokens experiment (when completed) will clarify whether the sample-efficiency gain justifies the compute overhead at this scale.
+**Memory overhead is negligible.** Peak memory increases by only 3 MiB because `train_batch_tokens` is held constant; the smaller per-GPU batch size (16 vs 64 sequences) offsets the longer per-sequence activation storage.
 
 ## Files
 

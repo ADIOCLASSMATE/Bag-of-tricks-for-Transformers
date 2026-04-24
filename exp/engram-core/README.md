@@ -11,7 +11,7 @@ This `core` variant is the cleanest Engram ablation:
 - It keeps the baseline training loop, data pipeline, validation BPB metric, and result reporting unchanged
 - It uses raw token IDs for n-gram hashing
 - It disables tokenizer compression
-- It disables hyper-connection by keeping `hc_mult=1`
+- It does not include hyper-connection (not implemented in this codebase)
 
 ### Origin
 
@@ -20,54 +20,58 @@ This is an in-framework adaptation of the official TinyEngram idea in `/inspire/
 ### Motivation
 
 - Test whether the Engram memory branch itself is useful without conflating it with tokenizer compression
-- Measure Engram on the same trainer and evaluation harness as `baseline-sp1024`
+- Measure Engram on the same trainer and evaluation harness as the baseline
 - Isolate the architectural value of hashed n-gram memory before adding more aggressive coupling mechanisms
 
 ## Impact on Training
 
-- **Parameters**: 17.06M -> 24.23M (+42.1%)
-- **Peak memory**: 10,246 MiB -> 12,581 MiB
-- **Fixed-compute throughput**: 13,263 -> 10,596 steps in 10 minutes
-- **Fixed-tokens wall-clock**: 832.8s -> 1053.3s
+- **Parameters**: 17.04M -> 24.21M (+42.1%, +7.17M)
+- **Peak memory**: 8,389 MiB -> 10,666 MiB (+2,277 MiB)
+- **Fixed-compute throughput**: ~6.01B tokens in 10 minutes (vs 7.67B baseline, -21.6%)
+- **Fixed-tokens wall-clock**: 772s -> 982s (+27.2%)
 
 ## Key Differences from Baseline
 
-| Component | baseline-sp1024 | engram-core |
+| Component | Baseline | engram-core |
 |---|---|---|
 | Engram branch | none | **enabled at layers 1, 4, 8** |
 | N-gram hashing | none | **2-gram and 3-gram** |
 | Hash input IDs | — | **raw token IDs** |
 | Tokenizer compression | none | none |
-| Hyper-connection | none | none (`hc_mult=1`) |
+| Hyper-connection | none | not implemented |
 | Extra optimizer group | none | **Engram embedding tables use separate Adam LR** |
 
 ## Results
 
 ### Fixed Compute (10 min wall-clock)
 
-| Metric | baseline-sp1024 | engram-core | Δ |
+| Metric | Baseline | engram-core | Delta |
 |---|---|---|---|
-| **Val BPB** | 1.2194 | **1.2057** | **−0.0137** |
-| Val Loss | 2.0589 | **2.0358** | **−0.0231** |
-| Steps completed | 13,263 | 10,596 | −2,667 |
-| Tokens processed | 6.95B | 5.56B | −1.40B |
+| **Val BPB** | 1.2979 | **1.2534** | **-0.0445** |
+| Val Loss | 2.1914 | **2.1163** | -0.0751 |
+| Tokens processed | 7.67B | 6.01B | -1.66B (-21.6%) |
+| Peak Memory | 8,389 MiB | 10,666 MiB | +2,277 MiB |
 
 ### Fixed Tokens (10B tokens)
 
-| Metric | baseline-sp1024 | engram-core | Δ |
+| Metric | Baseline | engram-core | Delta |
 |---|---|---|---|
-| **Val BPB** | 1.2118 | **1.1910** | **−0.0208** |
-| Val Loss | 2.0460 | **2.0109** | **−0.0351** |
-| Steps | 19,074 | 19,074 | 0 |
-| Wall-clock time | 832.8s | 1053.3s | +220.5s |
+| **Val BPB** | 1.2857 | **1.2466** | **-0.0391** |
+| Val Loss | 2.1709 | **2.1049** | -0.0660 |
+| Wall-clock time | 772s | 982s | +210s (+27.2%) |
+| Peak Memory | 8,389 MiB | 10,666 MiB | +2,277 MiB |
 
-## BPB Analysis
+| Total Params | Baseline | engram-core | Delta |
+|---|---|---|---|
+| — | 17.04M | 24.21M | +7.17M (+42.1%) |
 
-This is a clear positive result.
+## Analysis
 
-- **Fixed compute**: Even after processing 1.40B fewer tokens in the same 10-minute budget, the model still improves BPB by 0.0137. The Engram branch is paying for its own throughput cost.
-- **Fixed tokens**: The gain grows to 0.0208 BPB under equal 10B-token budget, which is the cleaner signal that the native Engram branch improves sample efficiency.
-- **Interpretation**: The core Engram memory mechanism is effective on this benchmark even before adding tokenizer compression or hyper-connection.
+Engram is one of the strongest tricks in the benchmark: -0.0445 FC BPB, -0.039 FT BPB.
+
+**Why it works.** The n-gram hash-based retrieval mechanism provides a direct lookup channel for recurring token patterns, complementing the attention mechanism's content-based retrieval. This is particularly powerful for language modeling where n-gram statistics are highly predictive. The short convolution in the engram branch provides temporal smoothing of the retrieved embeddings, allowing the model to integrate retrieved information over a local context window rather than applying it pointwise. The engram mechanism's value lies in its orthogonality to attention: attention captures long-range content dependencies while engram captures local statistical patterns. Their combination is more powerful than either alone.
+
+**Cost.** The improvement is dramatic but comes at significant cost: +7.17M params (+42%), +2.3GB memory, +27% wall-clock. Under fixed compute, the model processes 21.6% fewer tokens due to the overhead of the engram branch — yet still improves by -0.0445 BPB, indicating the n-gram retrieval signal is extremely valuable per token.
 
 ## Files
 

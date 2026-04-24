@@ -1,12 +1,11 @@
 """
-Naive architecture GPT with strong training recipe + learned smear injection.
+trick: loop-share-first — First N blocks weight-shared (looped) + remaining unique blocks
 
-Architecture is standard (no tricks) plus smear: GQA, RoPE, RMSNorm (no learnable weight), QK-Norm, Tied Embeddings,
+Architecture is standard GPT (no baseline-sp1024 tricks) plus:
+  - First N transformer blocks repeated M times (weight-sharing) + remaining blocks unique
+
+Architecture: GQA, RoPE, RMSNorm (no learnable weight), QK-Norm, Tied Embeddings,
 CastedLinear, restore_low_dim_params_to_fp32.
-
-Smear trick: learned smear injection before the transformer stack. Adds a learned scalar lambda and
-a per-position gate (CastedLinear) that mixes the previous token's embedding into the current token,
-controlled by sigmoid(lambda) * sigmoid(gate(x)).
 
 Training recipe borrows from modded-nanogpt:
   - Muon optimizer for matrix params, Adam for scalar/embed params with separate LRs
@@ -48,7 +47,7 @@ class Hyperparameters:
     val_files = os.environ.get("VAL_FILES", os.path.join(data_path, "fineweb_val_*.bin"))
     tokenizer_path = os.environ.get("TOKENIZER_PATH", "./data/tokenizers/fineweb_1024_bpe.model")
     run_id = os.environ.get("RUN_ID", str(uuid.uuid4()))
-    output_dir = os.environ.get("OUTPUT_DIR", "logs")
+    output_dir = os.environ.get("OUTPUT_DIR", str(Path(__file__).parent / "logs"))
     experiment_name = os.environ.get("EXPERIMENT_NAME", run_id)
     control_mode = os.environ.get("CONTROL_MODE", "single_run")
     target_train_tokens = int(os.environ.get("TARGET_TRAIN_TOKENS", "0"))
@@ -76,6 +75,10 @@ class Hyperparameters:
     mlp_mult = int(os.environ.get("MLP_MULT", 2))
     tie_embeddings = bool(int(os.environ.get("TIE_EMBEDDINGS", "1")))
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
+
+    # trick: loop-share-first — first N blocks shared (looped) hyperparameters
+    num_loop_layers = int(os.environ.get("NUM_LOOP_LAYERS", "4"))
+    num_loop_repeats = int(os.environ.get("NUM_LOOP_REPEATS", "3"))
 
     # Optimizer hyperparameters (Muon + Adam, from modded-nanogpt)
     embed_lr = float(os.environ.get("EMBED_LR", 0.6))
@@ -122,7 +125,7 @@ CONTROL_TENSOR_NAME_PATTERNS = tuple(
     pattern
     for pattern in os.environ.get(
         "CONTROL_TENSOR_NAME_PATTERNS",
-        "smear_lambda",
+        "",
     ).split(",")
     if pattern
 )
@@ -625,15 +628,16 @@ class GPT(nn.Module):
         mlp_mult: int,
         tie_embeddings: bool,
         rope_base: float,
+        num_loop_layers: int,
+        num_loop_repeats: int,
     ):
         super().__init__()
         self.tie_embeddings = tie_embeddings
+        self.num_loop_layers = num_loop_layers
+        self.num_loop_repeats = num_loop_repeats
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
-        # trick: smear — source-faithful modded-nanogpt variant
-        self.smear_lambda = nn.Parameter(torch.tensor(0.0, dtype=torch.float32))
-        self.smear_gate = CastedLinear(12, 1, bias=False)
-        nn.init.zeros_(self.smear_gate.weight)
-        self.blocks = nn.ModuleList(
+        # trick: loop-share-first — first N blocks shared (looped) + remaining unique
+        self.encoder_blocks = nn.ModuleList(
             [
                 Block(
                     model_dim,
@@ -642,7 +646,21 @@ class GPT(nn.Module):
                     mlp_mult,
                     rope_base,
                 )
-                for _ in range(num_layers)
+                for _ in range(num_loop_layers)
+            ]
+        )
+        num_decoder = num_layers - num_loop_layers
+        self.num_decoder_layers = num_decoder
+        self.decoder_blocks = nn.ModuleList(
+            [
+                Block(
+                    model_dim,
+                    num_heads,
+                    num_kv_heads,
+                    mlp_mult,
+                    rope_base,
+                )
+                for _ in range(num_decoder)
             ]
         )
         self.final_norm = RMSNorm()
@@ -650,13 +668,12 @@ class GPT(nn.Module):
 
     def forward(self, input_ids: Tensor, target_ids: Tensor) -> Tensor:
         x = self.tok_emb(input_ids)
-        # trick: smear — source-faithful modded-nanogpt variant
-        if x.size(1) > 1:
-            smear_gate_out = self.smear_lambda.to(dtype=x.dtype) * torch.sigmoid(
-                self.smear_gate(x[:, 1:, :self.smear_gate.in_features])
-            )
-            x = torch.cat((x[:, :1, :], x[:, 1:, :] + smear_gate_out * x[:, :-1, :]), dim=1)
-        for block in self.blocks:
+        # trick: loop-share-first — looped first N blocks
+        for rep in range(self.num_loop_repeats):
+            for block in self.encoder_blocks:
+                x = block(x)
+        # trick: loop-share-first — remaining unique blocks
+        for block in self.decoder_blocks:
             x = block(x)
         x = self.final_norm(x).reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
@@ -788,6 +805,8 @@ def main() -> None:
         mlp_mult=args.mlp_mult,
         tie_embeddings=args.tie_embeddings,
         rope_base=args.rope_base,
+        num_loop_layers=args.num_loop_layers,
+        num_loop_repeats=args.num_loop_repeats,
     ).to(device).bfloat16()
     for module in base_model.modules():
         if isinstance(module, CastedLinear):
@@ -801,7 +820,8 @@ def main() -> None:
     # - untied lm_head (Adam) uses HEAD_LR
     # - matrix params in transformer blocks use MATRIX_LR via Muon
     # - vectors/scalars use SCALAR_LR via Adam
-    block_named_params = list(base_model.blocks.named_parameters())
+    # trick: loop-share-first — collect params from both encoder and decoder blocks
+    block_named_params = list(base_model.encoder_blocks.named_parameters()) + list(base_model.decoder_blocks.named_parameters())
     matrix_params = [
         p
         for name, p in block_named_params
@@ -812,9 +832,6 @@ def main() -> None:
         for name, p in block_named_params
         if p.ndim < 2 or any(pattern in name for pattern in CONTROL_TENSOR_NAME_PATTERNS)
     ]
-    # trick: smear — add smear params to optimizer groups
-    scalar_params.append(base_model.smear_lambda)
-    matrix_params.append(base_model.smear_gate.weight)
     token_lr = args.tied_embed_lr if args.tie_embeddings else args.embed_lr
     optimizer_tok = torch.optim.Adam(
         [{"params": [base_model.tok_emb.weight], "lr": token_lr, "base_lr": token_lr}],
@@ -863,6 +880,7 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
+    log0(f"trick:loop-share-first loop_layers:{args.num_loop_layers} loop_repeats:{args.num_loop_repeats} decoder_layers:{base_model.num_decoder_layers}")
 
     if master_process and args.enable_wandb and args.wandb_mode != "disabled":
         try:

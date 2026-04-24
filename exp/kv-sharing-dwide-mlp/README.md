@@ -4,7 +4,7 @@
 
 In standard Transformers, every layer has its own independent key (K) and value (V) projection matrices. However, the KV projections across layers may learn redundant representations, especially in adjacent layers that process similar features. If some layers can share KV projections without significant quality loss, the saved parameter budget can be reallocated to increase model capacity elsewhere.
 
-Gemma 4 introduces **cross-layer KV sharing**: the last N layers reuse KV projections from earlier layers, eliminating their own `c_k`, `c_v`, `k_norm`, and `v_norm` parameters. To compensate for the reduced per-layer capacity, the saved parameters are reinvested into doubling the MLP width of the shared layers. Note that this is **not parameter-neutral** in our setting: the KV savings (2 layers × 2 projections × dim × kv_dim) are much smaller than the MLP width doubling (2 layers × 2 projections × dim × 2×dim), resulting in a net +9.2% parameter increase (17.06M → 18.63M). The rebalancing trades a small amount of attention capacity for substantially more feed-forward capacity.
+Gemma 4 introduces **cross-layer KV sharing**: the last N layers reuse KV projections from earlier layers, eliminating their own `c_k`, `c_v`, `k_norm`, and `v_norm` parameters. To compensate for the reduced per-layer capacity, the saved parameter budget is supplemented with additional parameters to double the MLP width of the shared layers. Note that this is **not parameter-neutral** in our setting: the KV savings (2 layers × 2 projections × dim × kv_dim) are much smaller than the MLP width doubling (2 layers × 2 projections × dim × 2×dim), resulting in a net +9.2% parameter increase (17.04M → 18.63M). The rebalancing trades a small amount of attention capacity for substantially more feed-forward capacity.
 
 ## What This Ablation Tests
 
@@ -25,7 +25,7 @@ KV source mapping: layer 7 → layer 0's KV, layer 8 → layer 1's KV.
 
 3. **Training dynamics**: Shared KV means the shared projection weights receive gradient updates from both the source and consumer layers. This may act as a form of implicit regularization (similar to weight sharing in other contexts), potentially improving generalization but possibly slowing convergence.
 
-4. **U-Net skip interaction**: The baseline uses U-Net skip connections that link encoder layer i to decoder layer i. With KV sharing mapping layer 7→0 and 8→1, there is a natural alignment: shared layers reuse KV from the same layers that provide their skip connections. This architectural synergy may amplify or interfere with the skip connection's effectiveness.
+4. **Cross-layer alignment**: The baseline uses standard sequential blocks with no skip connections between non-adjacent layers. With KV sharing mapping layer 7→0 and 8→1, the shared KV projections create an implicit cross-layer link between early and late layers. This may help or hinder depending on whether early and late layers produce compatible key/value distributions.
 
 ## Key Differences from Baseline
 
@@ -40,28 +40,29 @@ KV source mapping: layer 7 → layer 0's KV, layer 8 → layer 1's KV.
 
 | Regime | Metric | Baseline | KV Sharing + Double-Wide MLP | Delta |
 |---|---|---|---|---|
-| Fixed Compute (10 min) | Val BPB | 1.2194 | 1.2093 | **-0.0101** |
-| Fixed Compute (10 min) | Train Tokens | 6.954B | 6.934B | -0.3% |
-| Fixed Compute (10 min) | Peak Memory | 10,246 MiB | 10,512 MiB | +266 MiB |
-| Fixed Tokens (10B) | Val BPB | 1.2118 | 1.2014 | **-0.0104** |
-| Fixed Tokens (10B) | Wall-clock | 832.8s | 852.9s | +2.4% |
-| — | Total Params | 17.06M | 18.63M | +9.2% |
+| Fixed Compute (10 min) | Val BPB | 1.2979 | 1.2905 | **-0.0074** |
+| Fixed Compute (10 min) | Val Loss | 2.1914 | 2.1789 | -0.0125 |
+| Fixed Compute (10 min) | Train Tokens | 7.67B | 7.47B | -2.6% |
+| Fixed Compute (10 min) | Peak Memory | 8,389 MiB | 8,654 MiB | +265 MiB |
+| Fixed Tokens (10B) | Val BPB | 1.2857 | 1.2823 | **-0.0034** |
+| Fixed Tokens (10B) | Val Loss | 2.1709 | 2.1651 | -0.0058 |
+| Fixed Tokens (10B) | Wall-clock | 772s | 794s | +2.8% |
+| Fixed Tokens (10B) | Peak Memory | 8,389 MiB | 8,654 MiB | +265 MiB |
+| -- | Total Params | 17.04M | 18,612,224 (18.61M) | +1,572,864 (+9.2%) |
 
 ## Analysis
 
-KV sharing + double-wide MLP is the **second-best trick** in this ablation suite, achieving -0.010 BPB improvement in both regimes with minimal throughput cost.
+KV sharing + double-wide MLP provides a **consistent improvement** across both evaluation regimes: -0.0074 BPB under fixed-compute and -0.0034 BPB under fixed-tokens.
 
-**The MLP width increase is the primary driver**: The 9.2% parameter increase comes almost entirely from doubling the MLP width in layers 7–8 (from 2× to 4× model_dim). This reallocates capacity from KV projections (which are relatively small: 2 × dim × num_kv_heads × head_dim per layer) to the feed-forward network, which is the primary expressivity bottleneck. The result strongly suggests that MLP capacity is more valuable than KV projection diversity in the later layers of this architecture.
+**Attention-to-MLP parameter reallocation works**: The shared K/V mechanism reduces attention parameter count for the shared layers (7 and 8), while the double-wide MLP compensates by adding more feed-forward capacity. This trades attention diversity for MLP expressivity. Under fixed-compute, the model processes 2.6% fewer tokens yet still achieves a -0.0074 BPB improvement, indicating that the wider MLP provides meaningful per-token quality gains that more than offset the throughput reduction. Under fixed-tokens, the -0.0034 BPB improvement confirms the sample efficiency gain is genuine.
 
-**KV sharing has minimal negative impact**: Layers 7 and 8 share KV projections from layers 0 and 1 respectively, which means they cannot learn independent key/value representations. Despite this, the model shows no degradation — in fact, it improves. This indicates that the KV projections in early and late layers learn sufficiently similar representations that sharing them does not create a bottleneck. The U-Net skip connections (linking layer i to layer 8-i) may contribute to this alignment, as the skip-connected layers naturally develop correlated representations.
+**Cross-layer KV sharing is viable**: The shared K/V approach is inspired by GQA (Grouped Query Attention) taken further -- instead of just sharing K/V heads within a layer, K/V are shared across specific layers entirely, eliminating redundant key/value projections. Layers 7 and 8 reuse KV projections from layers 0 and 1 respectively, and the consistent improvement indicates the shared representations are not a bottleneck: early and late layers learn sufficiently compatible key/value distributions.
 
-**Excellent compute efficiency**: Under fixed-compute, the trick processes virtually the same number of tokens as baseline (6.93B vs 6.95B, only -0.3%), meaning the BPB improvement comes from genuinely better per-token learning rather than from seeing more data. The 2.4% wall-clock overhead in fixed-tokens is remarkably low given the 9.2% parameter increase, because the wider MLP in only 2 of 9 layers has a modest impact on total FLOPs, and the KV sharing slightly reduces attention-path computation.
+**Diminishing returns under fixed-tokens**: The improvement is meaningful under fixed-compute (-0.007 BPB) despite only a 2.6% token reduction, suggesting the parameter reallocation from attention to MLP is beneficial. Under fixed-tokens, the improvement is smaller (-0.003 BPB) -- the extra MLP capacity provides diminishing returns when the model has enough compute to train all parameters adequately.
 
-**Implicit regularization from shared gradients**: The shared KV projections receive gradient updates from both the source layer and the consuming layer, which may act as a form of regularization. The combined gradient signal could help the shared projections learn more robust, generalizable features, contributing to the observed improvement.
+**Improvement per added parameter is modest**: The +1.57M param overhead is significant (+9.2% more params). While the trick works, the improvement per added parameter is modest compared to simpler tricks like untie-embed, which achieves comparable or better BPB gains with far fewer additional parameters. The 2.8% wall-clock overhead in fixed-tokens is modest given the parameter increase, since the wider MLP in only 2 of 9 layers has limited impact on total FLOPs and KV sharing slightly reduces attention-path computation. Memory increases by 265 MiB.
 
-**Parameter efficiency comparison with GeGLU**: GeGLU achieves -0.021 BPB with +27.6% parameters, while KV sharing achieves -0.010 BPB with only +9.2% parameters. Normalized by parameter overhead, KV sharing is more parameter-efficient (0.0011 BPB per % parameter increase vs. GeGLU's 0.0008). This suggests that targeted parameter reallocation (moving capacity from attention to MLP in specific layers) is more efficient than uniformly increasing MLP parameters across all layers.
-
-**Conclusion**: KV sharing + double-wide MLP is an effective architectural modification that improves model quality by reallocating parameter budget from underutilized KV projections to higher-impact MLP capacity. The trick works particularly well in this U-Net architecture where skip connections align early and late layer representations, and the compute overhead is minimal. The result supports the design principle that not all parameters contribute equally to model quality — strategic reallocation can yield disproportionate gains.
+**Conclusion**: KV sharing + double-wide MLP is viable when the parameter budget allows the extra MLP width. The trick provides consistent but modest improvements (-0.007 FC BPB, -0.003 FT BPB) at the cost of +1.57M params and +2.8% wall-clock. For parameter-constrained settings, simpler tricks likely offer better efficiency.
 
 ## Files
 

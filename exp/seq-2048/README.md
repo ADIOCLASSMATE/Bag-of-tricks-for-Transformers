@@ -17,41 +17,35 @@ Since `train_batch_tokens` is held constant at 524,288, doubling the sequence le
 
 ## Results
 
-### Fixed Compute (10 min wall-clock)
+Model size: 17.04M parameters (unchanged from baseline).
 
-| Metric | baseline | seq-2048 | Δ |
+### Fixed Compute (600s wall-clock)
+
+| Metric | Baseline | seq-2048 | Δ |
 |---|---|---|---|
-| **Val BPB** | 1.2194 | **1.2030** | **−0.0164** |
-| Val Loss | 2.0589 | 2.0313 | −0.0276 |
-| Steps completed | 13,263 | 11,556 | −1,707 |
-| Tokens processed | 6.95B | 6.06B | −0.90B |
+| **Val BPB** | 1.2979 | 1.2900 | **-0.0079** |
+| Val Loss | 2.1914 | 2.1781 | -0.0133 |
+| Train Tokens | 7.67B | 6.40B | -16.6% |
+| Peak Memory | 8,389 MiB | 8,390 MiB | +1 MiB |
 
 ### Fixed Tokens (10B tokens)
 
-| Metric | baseline | seq-2048 | Δ |
+| Metric | Baseline | seq-2048 | Δ |
 |---|---|---|---|
-| **Val BPB** | 1.2118 | **1.1917** | **−0.0201** |
-| Val Loss | 2.0460 | 2.0121 | −0.0339 |
-| Steps | 19,074 | 19,074 | 0 |
-| Wall-clock time | 832.8s | 974.4s | +141.6s |
+| **Val BPB** | 1.2857 | 1.2711 | **-0.0146** |
+| Val Loss | 2.1709 | 2.1461 | -0.0248 |
+| Wall-clock | 772s | 924s | +19.7% |
+| Peak Memory | 8,389 MiB | 8,390 MiB | +1 MiB |
 
 ## Analysis
 
-### Why does BPB improve with longer sequences?
+Doubling the sequence length from 1024 to 2048 improves validation BPB under both evaluation regimes: -0.008 at fixed compute and -0.015 at fixed tokens. The model architecture and parameter count are identical; only the context window changes.
 
-1. **Longer context window**: With `seq_len=2048`, the model can attend to 2× more preceding tokens, capturing longer-range dependencies. This directly benefits next-token prediction for tokens that depend on distant context, lowering the per-byte prediction error.
+**Why longer context helps.** Each token can attend to 2x more preceding positions, capturing dependencies that are truncated at seq_len=1024. Doubling the window also halves the number of sequence boundaries where the model starts with no prior context, reducing the fraction of tokens trained without full receptive-field access. The resulting gradients are richer because each sample contains more contiguous context.
 
-2. **Better gradient signal**: Each training sequence contains more contiguous context, providing richer and more coherent gradient signals per sample. This can lead to more effective parameter updates compared to shorter, more fragmented sequences.
+**Throughput cost.** Attention is O(n^2) in sequence length, so seq_len=2048 processes ~20% fewer tokens per unit wall-clock time (6.40B vs 7.67B in 600s). Despite this, per-token quality improves enough that the fixed-compute comparison still favors the longer window. At fixed tokens, the 20% wall-clock overhead buys a -0.015 BPB improvement -- a favorable trade-off when compute budget is flexible.
 
-3. **Reduced boundary artifacts**: Shorter sequences introduce more artificial truncation boundaries where the model has no context at the start of each sequence. Doubling the sequence length halves the number of such "cold start" positions per batch.
-
-### Why are steps identical under fixed-tokens?
-
-Steps are determined by `total_tokens / train_batch_tokens`. Since both experiments use the same `train_batch_tokens` (524,288) and target the same 10B tokens, both require exactly ⌈10B / 524,288⌉ = 19,074 steps.
-
-### Compute trade-off
-
-Longer sequences increase per-step computation (attention is O(n²) in sequence length), resulting in ~17% more wall-clock time (974s vs 833s) for the same number of tokens. Despite processing **fewer tokens** in the fixed-compute regime (6.06B vs 6.95B), the seq2048 model still achieves a **lower BPB**, indicating that the quality gain from longer context outweighs the throughput loss.
+**Memory impact.** Peak GPU memory is essentially unchanged (+1 MiB), because `train_batch_tokens` is held constant: the longer sequences are offset by fewer sequences per micro-batch (32 vs 64).
 
 ## Files
 

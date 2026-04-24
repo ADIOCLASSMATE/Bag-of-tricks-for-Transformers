@@ -2,12 +2,12 @@
 
 ## Method Overview
 
-This experiment applies a muP-style output-projection scaling after initialization: for each
-non-zero-init projection weight, it multiplies the weight by `1 / sqrt(2 * L)`, where `L` is the
-number of transformer blocks.
+This experiment applies a muP-style output-projection scaling after initialization: all 18 output
+projection layers (9 `attn.proj` + 9 `mlp.proj`) are multiplied by `1 / sqrt(2 * L)`, where `L`
+is the number of transformer blocks. With `L = 9`, the scaling factor is `1 / sqrt(18) ≈ 0.236`.
 
-Concretely, the trainer keeps the baseline zero-initialization for layers marked with
-`_zero_init=True`, and only rescales projection layers whose names match `.proj`.
+We scale all output projection weights by `1/sqrt(N)` where `N` is the total number of residual
+branches, following muP (maximal update parameterization).
 
 ### Origin
 
@@ -25,48 +25,40 @@ This experiment isolates the projection-scaling part from the orthogonal-init pa
 - **Parameters**: No change
 - **Throughput**: No measurable runtime impact after initialization
 - **Memory**: No change
-- **Optimization**: Only non-zero-init `.proj` weights are rescaled; `_zero_init=True` output projections remain unchanged
+- **Optimization**: All 18 `.proj` weights are rescaled by `1/sqrt(2L)` at initialization
 
 ## Important Note
 
-In the current SP1024 baseline, the main transformer output projections are marked `_zero_init=True`.
-Those layers stay zero-initialized here, so this isolated experiment may have little or no effect
-unless the model includes non-zero-init `.proj` layers.
+ALL 18 output projection layers (9 attn.proj + 9 mlp.proj) are scaled by 1/sqrt(18) ≈ 0.236 at
+initialization. The baseline uses default PyTorch initialization for these projections (no special
+scaling), so this trick affects every residual branch in the model.
 
 ## Key Differences from Baseline
 
-| Component | baseline-sp1024 | mup-scaled-output-projections |
+| Component | Baseline | mup-scaled-output-projections |
 |---|---|---|
-| Non-zero-init `.proj` weights | default init scale | **multiplied by `1 / sqrt(2L)`** |
-| `_zero_init=True` projections | zero init | zero init |
+| Output projection (`.proj`) weights | default init scale | **multiplied by `1 / sqrt(2L)` ≈ 0.236** |
 | Runtime graph | unchanged | unchanged |
 | Everything else | identical | identical |
 
 ## Results
 
-> Results will be filled in after running the experiment.
+| Regime | Metric | Baseline | muP-Scaled | Delta |
+|---|---|---|---|---|
+| Fixed Compute (10 min) | Val BPB | 1.2979 | 1.2992 | +0.0013 |
+| Fixed Compute (10 min) | Val Loss | 2.1914 | 2.1937 | +0.0023 |
+| Fixed Compute (10 min) | Train Tokens | 7.67B | 7.62B | -0.7% |
+| Fixed Compute (10 min) | Peak Memory | 8,389 MiB | 8,389 MiB | 0 |
+| Fixed Tokens (10B) | Val BPB | 1.2857 | 1.2859 | +0.0002 |
+| Fixed Tokens (10B) | Val Loss | 2.1709 | 2.1712 | +0.0003 |
+| Fixed Tokens (10B) | Wall-clock | 772s | 774s | +0.3% |
+| — | Total Params | 17.04M | 17.04M | 0 |
 
-### Fixed Compute (10 min wall-clock)
+## Analysis
 
-| Metric | baseline-sp1024 | mup-scaled-output-projections | Δ |
-|---|---|---|---|
-| **Val BPB** | 1.2194 | — | — |
-| Val Loss | 2.0589 | — | — |
+The muP output-projection scaling multiplies all 18 output projection weights by `1/sqrt(2L) ≈ 0.236` at initialization. The intent is to dampen residual-branch amplitude early in training so that deeper stacks do not explode, inspired by muP's width- and depth-aware scaling rules.
 
-### Fixed Tokens (10B tokens)
-
-| Metric | baseline-sp1024 | mup-scaled-output-projections | Δ |
-|---|---|---|---|
-| **Val BPB** | 1.2118 | — | — |
-| Val Loss | 2.0460 | — | — |
-
-## BPB Analysis
-
-> To be completed after experiments.
-
-- **If BPB improves**: The smaller non-zero-init projection scale likely reduced early residual-branch noise and made optimization cleaner.
-- **If BPB is unchanged**: The current baseline may expose too few non-zero-init `.proj` weights for this trick to matter in isolation.
-- **If BPB worsens**: The reduced projection scale may over-dampen useful residual updates when applied without the rest of the muP-style initialization stack.
+The trick is NOT inert — it affects every output projection in the model. However, the small regressions (+0.0013 BPB fixed-compute, +0.0002 BPB fixed-tokens) indicate that this particular depth-scaling factor is slightly suboptimal for this architecture, or that the default PyTorch initialization is already well-tuned for a 9-layer model. The `1/sqrt(2L)` scaling shrinks initial residual contributions by roughly 4.2x, which may be too aggressive for a shallow model where the default Kaiming/Xavier init already produces reasonable residual magnitudes. The trick could still prove beneficial in deeper models where uncontrolled residual growth is more of a concern.
 
 ## Files
 

@@ -43,7 +43,7 @@ class Hyperparameters:
     val_files = os.environ.get("VAL_FILES", os.path.join(data_path, "fineweb_val_*.bin"))
     tokenizer_path = os.environ.get("TOKENIZER_PATH", "./data/tokenizers/fineweb_1024_bpe.model")
     run_id = os.environ.get("RUN_ID", str(uuid.uuid4()))
-    output_dir = os.environ.get("OUTPUT_DIR", "logs")
+    output_dir = os.environ.get("OUTPUT_DIR", str(Path(__file__).parent / "logs"))
     experiment_name = os.environ.get("EXPERIMENT_NAME", run_id)
     control_mode = os.environ.get("CONTROL_MODE", "single_run")
     target_train_tokens = int(os.environ.get("TARGET_TRAIN_TOKENS", "0"))
@@ -577,10 +577,10 @@ class CausalSelfAttention(nn.Module):
             is_causal=True,
             enable_gqa=(self.num_kv_heads != self.num_heads),
         )
-        y = y.transpose(1, 2).contiguous().reshape(bsz, seqlen, dim)
-        # trick: attention-head gating — apply learned per-head sigmoid gate
+        # trick: attention-head gating — apply learned per-head sigmoid gate (before merging heads)
         gate = torch.sigmoid(self.attn_gate(x[..., :self.attn_gate_channels])).to(dtype=y.dtype)
         y = y * gate.transpose(1, 2).unsqueeze(-1)
+        y = y.transpose(1, 2).contiguous().reshape(bsz, seqlen, dim)
         return self.proj(y)
 
 
@@ -798,7 +798,7 @@ def main() -> None:
         p
         for name, p in block_named_params
         if p.ndim == 2 and not any(pattern in name for pattern in CONTROL_TENSOR_NAME_PATTERNS)
-    ] + [base_model.blocks[i].attn.attn_gate.weight for i in range(args.num_layers)]
+    ]
     scalar_params = [
         p
         for name, p in block_named_params

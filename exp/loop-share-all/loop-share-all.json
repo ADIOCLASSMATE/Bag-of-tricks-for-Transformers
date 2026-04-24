@@ -1,6 +1,6 @@
 {
     "version": 1,
-    "trainer_path": "exp/loop-pure/train_gpt.py",
+    "trainer_path": "exp/loop-share-all/train_gpt.py",
     "launcher": {
         "nproc_per_node": 8,
         "master_port_base": 29500
@@ -36,8 +36,8 @@
     },
     "experiments": [
         {
-            "name": "loop-pure-fixed_time_10min",
-            "trainer_path": "exp/loop-pure/train_gpt.py",
+            "name": "loop-share-all-fixed_time_10min",
+            "trainer_path": "exp/loop-share-all/train_gpt.py",
             "control": {
                 "mode": "fixed_compute",
                 "target_wallclock_seconds": 600,
@@ -45,8 +45,8 @@
             }
         },
         {
-            "name": "loop-pure-fixed_tokens_10b",
-            "trainer_path": "exp/loop-pure/train_gpt.py",
+            "name": "loop-share-all-fixed_tokens_10b",
+            "trainer_path": "exp/loop-share-all/train_gpt.py",
             "control": {
                 "mode": "fixed_tokens",
                 "target_train_tokens": 10000000000

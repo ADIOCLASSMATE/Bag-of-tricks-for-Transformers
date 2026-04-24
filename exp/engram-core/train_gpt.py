@@ -50,7 +50,7 @@ class Hyperparameters:
     val_files = os.environ.get("VAL_FILES", os.path.join(data_path, "fineweb_val_*.bin"))
     tokenizer_path = os.environ.get("TOKENIZER_PATH", "./data/tokenizers/fineweb_1024_bpe.model")
     run_id = os.environ.get("RUN_ID", str(uuid.uuid4()))
-    output_dir = os.environ.get("OUTPUT_DIR", "logs")
+    output_dir = os.environ.get("OUTPUT_DIR", str(Path(__file__).parent / "logs"))
     experiment_name = os.environ.get("EXPERIMENT_NAME", run_id)
     control_mode = os.environ.get("CONTROL_MODE", "single_run")
     target_train_tokens = int(os.environ.get("TARGET_TRAIN_TOKENS", "0"))
@@ -1208,6 +1208,10 @@ def main() -> None:
         for name, p in block_named_params
         if p.ndim == 2 and not any(pattern in name for pattern in CONTROL_TENSOR_NAME_PATTERNS)
     ]
+    # trick: engram-core — Conv1d weight is 3D, falls through ndim==2 and ndim<2 filters
+    # Use a separate Adam group (not Muon) since depthwise Conv1d shape (dim,1,kernel)
+    # causes extreme Muon gradient scaling ~22.6x
+    conv_weights = [p for name, p in block_named_params if p.ndim >= 3 and "conv.weight" in name]
     scalar_params = [
         p
         for name, p in block_named_params
@@ -1243,6 +1247,14 @@ def main() -> None:
             fused=True,
         )
         optimizers.append(optimizer_engram)
+    if conv_weights:
+        optimizer_conv = torch.optim.Adam(
+            [{"params": conv_weights, "lr": args.scalar_lr, "base_lr": args.scalar_lr}],
+            betas=(args.beta1, args.beta2),
+            eps=args.adam_eps,
+            fused=True,
+        )
+        optimizers.append(optimizer_conv)
     optimizer_head: torch.optim.Optimizer | None = None
     if base_model.lm_head is not None:
         optimizer_head = torch.optim.Adam(

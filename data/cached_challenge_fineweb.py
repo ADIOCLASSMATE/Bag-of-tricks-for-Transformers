@@ -96,8 +96,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--train-shards",
         type=int,
-        default=80,
-        help="Number of training shards to download for the selected variant. Defaults to 80.",
+        default=0,
+        help="Number of training shards to download. 0 = download all shards for the variant.",
     )
     parser.add_argument(
         "--variant",
@@ -130,6 +130,8 @@ def main() -> None:
         raise ValueError(f"dataset {dataset_dir} not found in {REMOTE_ROOT_PREFIX}/manifest.json")
     max_train_shards = int((dataset_entry.get("stats") or {}).get("files_train"))
     val_shards = int((dataset_entry.get("stats") or {}).get("files_val"))
+    if train_shards == 0:
+        train_shards = max_train_shards
     if train_shards > max_train_shards:
         raise ValueError(
             f"{args.variant} only has {max_train_shards} training shards on {REPO_ID}, requested {train_shards}"

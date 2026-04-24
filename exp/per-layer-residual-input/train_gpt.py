@@ -60,7 +60,7 @@ class Hyperparameters:
     val_files = os.environ.get("VAL_FILES", os.path.join(data_path, "fineweb_val_*.bin"))
     tokenizer_path = os.environ.get("TOKENIZER_PATH", "./data/tokenizers/fineweb_1024_bpe.model")
     run_id = os.environ.get("RUN_ID", str(uuid.uuid4()))
-    output_dir = os.environ.get("OUTPUT_DIR", "logs")
+    output_dir = os.environ.get("OUTPUT_DIR", str(Path(__file__).parent / "logs"))
     experiment_name = os.environ.get("EXPERIMENT_NAME", run_id)
     control_mode = os.environ.get("CONTROL_MODE", "single_run")
     target_train_tokens = int(os.environ.get("TARGET_TRAIN_TOKENS", "0"))
@@ -835,9 +835,11 @@ def main() -> None:
         for name, p in block_named_params
         if p.ndim < 2 or any(pattern in name for pattern in CONTROL_TENSOR_NAME_PATTERNS)
     ]
+    # trick: per-layer-residual-input — add GPT-level params to optimizer
+    scalar_params.append(base_model.per_layer_model_projection.weight)
     token_lr = args.tied_embed_lr if args.tie_embeddings else args.embed_lr
     optimizer_tok = torch.optim.Adam(
-        [{"params": [base_model.tok_emb.weight], "lr": token_lr, "base_lr": token_lr}],
+        [{"params": [base_model.tok_emb.weight, base_model.embed_tokens_per_layer.weight], "lr": token_lr, "base_lr": token_lr}],
         betas=(args.beta1, args.beta2),
         eps=args.adam_eps,
         fused=True,

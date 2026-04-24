@@ -14,7 +14,18 @@ Naive architecture GPT with strong training recipe. Architecture is standard (no
 - CastedLinear (fp32 master weights + bf16 matmul)
 - restore_low_dim_params_to_fp32
 
-## Architectural Tricks Removed (vs exp/baseline-sp1024)
+## Results
+
+| Regime | Val BPB | Val Loss | Train Tokens | Wall-clock | Peak Memory |
+|---|---|---|---|---|---|
+| Fixed Compute (10 min) | 1.2979 | 2.1914 | 7.67B | 600s | 8,389 MiB |
+| Fixed Tokens (10B) | 1.2857 | 2.1709 | 10.00B | 772s | 8,389 MiB |
+
+| Model | Params | Dim | Heads | KV Heads | MLP Mult | Layers |
+|---|---|---|---|---|---|---|
+| GPT | 17.04M | 512 | 8 | 4 | 2 | 9 |
+
+## Architectural Tricks Removed (vs parameter-golf-baseline)
 
 | Removed Trick | Replaced With |
 |---|---|

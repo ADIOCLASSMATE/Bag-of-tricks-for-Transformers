@@ -29,7 +29,7 @@ From **parameter-golf A04 SmearGate**. In the source implementation, the gate is
 
 ## Key Differences from Baseline
 
-| Component | baseline-sp1024 | smear-gate |
+| Component | Baseline | smear-gate |
 |---|---|---|
 | Embedding preprocessing | none | **learned previous-token mix** |
 | Mixing coefficient | — | **per-dimension `sigmoid(smear_gate[d])`** |
@@ -38,29 +38,26 @@ From **parameter-golf A04 SmearGate**. In the source implementation, the gate is
 
 ## Results
 
-> Results will be filled in after running the experiment.
+| Regime | Metric | Baseline | Smear-Gate | Delta |
+|---|---|---|---|---|
+| Fixed Compute (10 min) | Val BPB | 1.2979 | 1.3016 | +0.0037 |
+| Fixed Compute (10 min) | Val Loss | 2.1914 | 2.1977 | +0.0063 |
+| Fixed Compute (10 min) | Train Tokens | 7.67B | 7.56B | -1.4% |
+| Fixed Compute (10 min) | Peak Memory | 8,389 MiB | 8,454 MiB | +65 MiB |
+| Fixed Tokens (10B) | Val BPB | 1.2857 | 1.2873 | +0.0016 |
+| Fixed Tokens (10B) | Val Loss | 2.1709 | 2.1735 | +0.0026 |
+| Fixed Tokens (10B) | Wall-clock | 772s | 781s | +1.2% |
+| — | Total Params | 17,039,360 | 17,039,872 | +512 |
 
-### Fixed Compute (10 min wall-clock)
+## Analysis
 
-| Metric | baseline-sp1024 | smear-gate | Δ |
-|---|---|---|---|
-| **Val BPB** | 1.2194 | — | — |
-| Val Loss | 2.0589 | — | — |
+Smear-gate regresses BPB by +0.0016 (fixed-tokens) to +0.0037 (fixed-compute). Per-dimension gating provides no benefit over the simpler global smear, confirming that the problem is not expressiveness but redundancy with self-attention.
 
-### Fixed Tokens (10B tokens)
+Self-attention already mixes information across positions. Pre-mixing embeddings before they enter the attention stack is at best redundant and at worst interferes with the patterns attention needs to learn. The per-dimension gate gives the model the flexibility to choose a useful operating point per feature, but it never finds one: the near-identity initialization (sigmoid(3) ~ 0.95) keeps the model close to baseline behavior, and gradient signal does not pull the gate toward a beneficial mixing ratio.
 
-| Metric | baseline-sp1024 | smear-gate | Δ |
-|---|---|---|---|
-| **Val BPB** | 1.2118 | — | — |
-| Val Loss | 2.0460 | — | — |
+The added parameter budget (+512) and memory (+65 MiB) produce no return. The throughput penalty under fixed-compute (-1.4% tokens) accounts for roughly half the FC BPB gap; the remainder is genuine quality degradation.
 
-## BPB Analysis
-
-> To be completed after experiments.
-
-- **If BPB improves**: The model benefits from learning its own local mixing strength rather than using a fixed `alpha=0.5`.
-- **If BPB is unchanged**: The learned gate may converge near 0.5, suggesting the fixed smear already captured the useful operating point.
-- **If BPB worsens**: The extra flexibility may destabilize the embedding stream or make optimization noisier than the fixed-smear variant.
+**Verdict**: Slightly harmful. Per-dimension gating does not rescue embedding-level pre-mixing because the obstacle is not insufficient flexibility but structural redundancy with attention.
 
 ## Files
 

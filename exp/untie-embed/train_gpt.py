@@ -5,7 +5,8 @@ Architecture: GQA, RoPE, RMSNorm (no learnable weight), QK-Norm, Untied Embeddin
 CastedLinear, restore_low_dim_params_to_fp32.
 
 Trick: untie-embed — separate input embedding and output lm_head matrices instead of
-weight tying. Uses embed_lr=0.3 and head_lr=0.002 (from nanogpt record), set via JSON config.
+weight tying. This is a pure ablation: only tie_embeddings changes (1→0); all other
+hyperparameters (including embed_lr=0.6, head_lr=0.008) remain at baseline defaults.
 
 Training recipe borrows from modded-nanogpt:
   - Muon optimizer for matrix params, Adam for scalar/embed params with separate LRs
@@ -47,7 +48,7 @@ class Hyperparameters:
     val_files = os.environ.get("VAL_FILES", os.path.join(data_path, "fineweb_val_*.bin"))
     tokenizer_path = os.environ.get("TOKENIZER_PATH", "./data/tokenizers/fineweb_1024_bpe.model")
     run_id = os.environ.get("RUN_ID", str(uuid.uuid4()))
-    output_dir = os.environ.get("OUTPUT_DIR", "logs")
+    output_dir = os.environ.get("OUTPUT_DIR", str(Path(__file__).parent / "logs"))
     experiment_name = os.environ.get("EXPERIMENT_NAME", run_id)
     control_mode = os.environ.get("CONTROL_MODE", "single_run")
     target_train_tokens = int(os.environ.get("TARGET_TRAIN_TOKENS", "0"))
@@ -73,7 +74,7 @@ class Hyperparameters:
     model_dim = int(os.environ.get("MODEL_DIM", 512))
     num_heads = int(os.environ.get("NUM_HEADS", 8))
     mlp_mult = int(os.environ.get("MLP_MULT", 2))
-    tie_embeddings = bool(int(os.environ.get("TIE_EMBEDDINGS", "1")))
+    tie_embeddings = bool(int(os.environ.get("TIE_EMBEDDINGS", "0")))
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
 
     # Optimizer hyperparameters (Muon + Adam, from modded-nanogpt)

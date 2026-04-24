@@ -1,11 +1,10 @@
 """
-Naive architecture GPT with strong training recipe + Hybrid Sliding Window.
+trick: loop-share-all — All blocks weight-shared: N shared blocks repeated M times
 
-Trick: Alternating sliding window / full causal attention layers.
-Every Nth layer uses full causal attention; the rest use sliding window attention.
+Architecture is standard GPT (no baseline-sp1024 tricks) plus:
+  - N shared transformer blocks repeated M times (weight-sharing, no skip connections)
 
-
-Architecture is standard (no tricks): GQA, RoPE, RMSNorm (no learnable weight), QK-Norm, Tied Embeddings,
+Architecture: GQA, RoPE, RMSNorm (no learnable weight), QK-Norm, Tied Embeddings,
 CastedLinear, restore_low_dim_params_to_fp32.
 
 Training recipe borrows from modded-nanogpt:
@@ -13,17 +12,6 @@ Training recipe borrows from modded-nanogpt:
   - Muon momentum warmup
   - No weight decay, no grad clip
   - JIT warmup with state reset
-
-Removed architectural tricks (vs baseline-sp1024):
-  - U-Net skip connections → standard sequential blocks
-  - ReLU^2 MLP → GELU
-  - Q-Gain → removed
-  - Learnable resid_mix → standard residual x + sublayer(x)
-  - Learnable attn_scale/mlp_scale → standard residual
-  - Logit softcap → raw logits
-  - Input RMSNorm on embedding → removed
-  - Zero-init for output projections → default init
-  - Small embedding init (std=0.005) → default nn.Embedding init
 """
 
 from __future__ import annotations
@@ -59,7 +47,7 @@ class Hyperparameters:
     val_files = os.environ.get("VAL_FILES", os.path.join(data_path, "fineweb_val_*.bin"))
     tokenizer_path = os.environ.get("TOKENIZER_PATH", "./data/tokenizers/fineweb_1024_bpe.model")
     run_id = os.environ.get("RUN_ID", str(uuid.uuid4()))
-    output_dir = os.environ.get("OUTPUT_DIR", "logs")
+    output_dir = os.environ.get("OUTPUT_DIR", str(Path(__file__).parent / "logs"))
     experiment_name = os.environ.get("EXPERIMENT_NAME", run_id)
     control_mode = os.environ.get("CONTROL_MODE", "single_run")
     target_train_tokens = int(os.environ.get("TARGET_TRAIN_TOKENS", "0"))
@@ -87,8 +75,10 @@ class Hyperparameters:
     mlp_mult = int(os.environ.get("MLP_MULT", 2))
     tie_embeddings = bool(int(os.environ.get("TIE_EMBEDDINGS", "1")))
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
-    sliding_window_pattern = int(os.environ.get("SLIDING_WINDOW_PATTERN", 3))
-    sliding_window_size = int(os.environ.get("SLIDING_WINDOW_SIZE", 512))
+
+    # trick: loop-share-all — looped transformer hyperparameters
+    num_loop_layers = int(os.environ.get("NUM_LOOP_LAYERS", "3"))
+    num_loop_repeats = int(os.environ.get("NUM_LOOP_REPEATS", "3"))
 
     # Optimizer hyperparameters (Muon + Adam, from modded-nanogpt)
     embed_lr = float(os.environ.get("EMBED_LR", 0.6))
@@ -554,8 +544,6 @@ class CausalSelfAttention(nn.Module):
         num_heads: int,
         num_kv_heads: int,
         rope_base: float,
-        is_sliding: bool = False,
-        sliding_window_size: int | None = None,
     ):
         super().__init__()
         if dim % num_heads != 0:
@@ -567,8 +555,6 @@ class CausalSelfAttention(nn.Module):
         self.head_dim = dim // num_heads
         if self.head_dim % 2 != 0:
             raise ValueError("head_dim must be even for RoPE")
-        self.is_sliding = is_sliding
-        self.sliding_window_size = sliding_window_size
         kv_dim = self.num_kv_heads * self.head_dim
         self.c_q = CastedLinear(dim, dim, bias=False)
         self.c_k = CastedLinear(dim, kv_dim, bias=False)
@@ -587,29 +573,14 @@ class CausalSelfAttention(nn.Module):
         cos, sin = self.rotary(seqlen, x.device, q.dtype)
         q = apply_rotary_emb(q, cos, sin)
         k = apply_rotary_emb(k, cos, sin)
-        if self.is_sliding:
-            w = self.sliding_window_size
-            n_rep = self.num_heads // self.num_kv_heads
-            k = k.unsqueeze(2).expand(-1, -1, n_rep, -1, -1).reshape(bsz, self.num_heads, seqlen, self.head_dim)
-            v = v.unsqueeze(2).expand(-1, -1, n_rep, -1, -1).reshape(bsz, self.num_heads, seqlen, self.head_dim)
-            scale = self.head_dim ** -0.5
-            scores = torch.matmul(q, k.transpose(-2, -1)) * scale
-            positions = torch.arange(seqlen, device=x.device)
-            causal_mask = positions.unsqueeze(1) >= positions.unsqueeze(0)
-            window_mask = positions.unsqueeze(1) >= (positions.unsqueeze(0) - w + 1)
-            mask = causal_mask & window_mask
-            scores = scores.masked_fill(~mask.unsqueeze(0).unsqueeze(0), float('-inf'))
-            attn = F.softmax(scores, dim=-1)
-            y = torch.matmul(attn, v)
-        else:
-            y = F.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                attn_mask=None,
-                is_causal=True,
-                enable_gqa=(self.num_kv_heads != self.num_heads),
-            )
+        y = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=None,
+            is_causal=True,
+            enable_gqa=(self.num_kv_heads != self.num_heads),
+        )
         y = y.transpose(1, 2).contiguous().reshape(bsz, seqlen, dim)
         return self.proj(y)
 
@@ -633,13 +604,11 @@ class Block(nn.Module):
         num_kv_heads: int,
         mlp_mult: int,
         rope_base: float,
-        is_sliding: bool = False,
-        sliding_window_size: int | None = None,
     ):
         super().__init__()
         self.attn_norm = RMSNorm()
         self.mlp_norm = RMSNorm()
-        self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base, is_sliding=is_sliding, sliding_window_size=sliding_window_size)
+        self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base)
         self.mlp = MLP(dim, mlp_mult)
 
     def forward(self, x: Tensor) -> Tensor:
@@ -659,20 +628,20 @@ class GPT(nn.Module):
         mlp_mult: int,
         tie_embeddings: bool,
         rope_base: float,
-        sliding_window_pattern: int = 3,
-        sliding_window_size: int = 512,
+        num_loop_layers: int,
+        num_loop_repeats: int,
     ):
         super().__init__()
+        assert num_layers == num_loop_layers * num_loop_repeats, (
+            f"num_layers ({num_layers}) must equal num_loop_layers * num_loop_repeats "
+            f"({num_loop_layers} * {num_loop_repeats} = {num_loop_layers * num_loop_repeats})"
+        )
         self.tie_embeddings = tie_embeddings
+        self.num_loop_layers = num_loop_layers
+        self.num_loop_repeats = num_loop_repeats
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
-        # Determine layer types: every Nth layer is global, rest sliding, last always global
-        layer_types: list[str] = []
-        for i in range(num_layers):
-            if (i + 1) % sliding_window_pattern == 0 or i == num_layers - 1:
-                layer_types.append("global")
-            else:
-                layer_types.append("sliding")
-        self.blocks = nn.ModuleList(
+        # trick: loop-share-all — shared blocks repeated, no skip connections
+        self.loop_blocks = nn.ModuleList(
             [
                 Block(
                     model_dim,
@@ -680,10 +649,8 @@ class GPT(nn.Module):
                     num_kv_heads,
                     mlp_mult,
                     rope_base,
-                    is_sliding=(layer_types[i] == "sliding"),
-                    sliding_window_size=sliding_window_size if layer_types[i] == "sliding" else None,
                 )
-                for i in range(num_layers)
+                for _ in range(num_loop_layers)
             ]
         )
         self.final_norm = RMSNorm()
@@ -691,8 +658,9 @@ class GPT(nn.Module):
 
     def forward(self, input_ids: Tensor, target_ids: Tensor) -> Tensor:
         x = self.tok_emb(input_ids)
-        for block in self.blocks:
-            x = block(x)
+        for rep in range(self.num_loop_repeats):
+            for block in self.loop_blocks:
+                x = block(x)
         x = self.final_norm(x).reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
         if self.tie_embeddings:
@@ -823,8 +791,8 @@ def main() -> None:
         mlp_mult=args.mlp_mult,
         tie_embeddings=args.tie_embeddings,
         rope_base=args.rope_base,
-        sliding_window_pattern=args.sliding_window_pattern,
-        sliding_window_size=args.sliding_window_size,
+        num_loop_layers=args.num_loop_layers,
+        num_loop_repeats=args.num_loop_repeats,
     ).to(device).bfloat16()
     for module in base_model.modules():
         if isinstance(module, CastedLinear):
@@ -838,7 +806,7 @@ def main() -> None:
     # - untied lm_head (Adam) uses HEAD_LR
     # - matrix params in transformer blocks use MATRIX_LR via Muon
     # - vectors/scalars use SCALAR_LR via Adam
-    block_named_params = list(base_model.blocks.named_parameters())
+    block_named_params = list(base_model.loop_blocks.named_parameters())
     matrix_params = [
         p
         for name, p in block_named_params
@@ -897,6 +865,7 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
+    log0(f"trick:loop-share-all loop_layers:{args.num_loop_layers} loop_repeats:{args.num_loop_repeats} effective_depth:{args.num_loop_layers * args.num_loop_repeats}")
 
     if master_process and args.enable_wandb and args.wandb_mode != "disabled":
         try:

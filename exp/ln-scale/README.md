@@ -27,7 +27,7 @@ From **parameter-golf A09 LNScale**. The reported idea is to damp activation mag
 
 ## Key Differences from Baseline
 
-| Component | baseline-sp1024 | ln-scale |
+| Component | Baseline | ln-scale |
 |---|---|---|
 | Norm output scale | 1.0 | **`1 / sqrt(layer_idx + 1)`** |
 | `Block` signature | no layer index | **adds `layer_idx`** |
@@ -36,29 +36,26 @@ From **parameter-golf A09 LNScale**. The reported idea is to damp activation mag
 
 ## Results
 
-> Results will be filled in after running the experiment.
+| Regime | Metric | Baseline | LN-Scale | Delta |
+|---|---|---|---|---|
+| Fixed Compute (10 min) | Val BPB | 1.2979 | 1.3118 | +0.0139 |
+| Fixed Compute (10 min) | Val Loss | 2.1914 | 2.2149 | +0.0235 |
+| Fixed Compute (10 min) | Train Tokens | 7.67B | 7.58B | -1.2% |
+| Fixed Compute (10 min) | Peak Memory | 8,389 MiB | 8,389 MiB | 0 |
+| Fixed Tokens (10B) | Val BPB | 1.2857 | 1.2923 | +0.0066 |
+| Fixed Tokens (10B) | Val Loss | 2.1709 | 2.1821 | +0.0112 |
+| Fixed Tokens (10B) | Wall-clock | 772s | 776s | +0.5% |
+| -- | Total Params | 17.04M | 17.04M | 0 |
 
-### Fixed Compute (10 min wall-clock)
+## Analysis
 
-| Metric | baseline-sp1024 | ln-scale | Δ |
-|---|---|---|---|
-| **Val BPB** | 1.2194 | — | — |
-| Val Loss | 2.0589 | — | — |
+LN-Scale degrades quality across both evaluation regimes (+0.014 BPB fixed-compute, +0.007 BPB fixed-tokens). The `1/sqrt(l+1)` damping factor is counterproductive at this depth.
 
-### Fixed Tokens (10B tokens)
+The root cause is over-damping. At the deepest layer (index 8), the scale drops to `1/sqrt(9) ≈ 0.333`, attenuating normalized activations by roughly 67%. Residual contributions from later blocks shrink proportionally, effectively reducing the model's functional depth. Earlier layers are also attenuated but less severely (e.g., layer 0 retains full scale, layer 4 gets `1/sqrt(5) ≈ 0.447`).
 
-| Metric | baseline-sp1024 | ln-scale | Δ |
-|---|---|---|---|
-| **Val BPB** | 1.2118 | — | — |
-| Val Loss | 2.0460 | — | — |
+A 9-layer baseline does not exhibit the activation-magnitude growth that LN-Scale is designed to correct. The fixed schedule therefore constrains the model without addressing any real pathology. Whether the trick helps in deeper architectures where activation growth is genuine remains an open question.
 
-## BPB Analysis
-
-> To be completed after experiments.
-
-- **If BPB improves**: The depth-dependent scaling reduced instability or over-amplification in later layers, making optimization cleaner.
-- **If BPB is unchanged**: Baseline normalization was already sufficient at 9 layers, so the extra damping does not materially change training.
-- **If BPB worsens**: The deeper layers may be over-damped, reducing their effective capacity and slowing useful feature formation.
+**Verdict**: Harmful at this scale. Depth-dependent damping is too aggressive for shallow models and provides no compensating benefit.
 
 ## Files
 
