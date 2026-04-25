@@ -4,7 +4,7 @@
 
 This experiment disables the attention sublayer in the **first transformer block only**. All later blocks keep the standard attention path.
 
-The implementation uses a static `layer_idx == 0` branch inside `Block.forward`, so the first block returns a zero attention contribution and only keeps the MLP path. To keep the ablation clean, the first block's entire attention branch (`attn_norm` + `attn`) is frozen and excluded from optimizer groups.
+The implementation uses a static `layer_idx == 0` branch inside `Block.forward`, so the first block returns a zero attention contribution and only keeps the MLP path. To keep the ablation clean, the first block's entire attention module (`attn`) is frozen and excluded from optimizer groups. (RMSNorm has no learnable weight, so `attn_norm` requires no freezing.)
 
 ### Origin
 
@@ -29,7 +29,7 @@ From **nanogpt-speedrun track_1_short / 2025-09-21_DropAttn**. The reported idea
 |---|---|---|
 | Block 0 attention | enabled | **disabled** |
 | Blocks 1-8 attention | enabled | enabled |
-| Code change | — | adds `layer_idx`, static skip in block 0, and freezes/excludes `blocks.0.attn_norm.*` plus `blocks.0.attn.*` |
+| Code change | — | adds `layer_idx`, static skip in block 0, and freezes/excludes `blocks.0.attn.*` |
 | Everything else | identical | identical |
 
 ## Results

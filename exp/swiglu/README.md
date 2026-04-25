@@ -17,7 +17,7 @@ This experiment replaces the baseline MLP with a SwiGLU MLP, keeping all other a
 | Activation | GELU (smooth, differentiable) | Swish/SiLU (smooth, non-monotonic) |
 | Gating | None | Explicit (gate x value) |
 
-Note: SwiGLU uses 3 projection matrices (gate, up, down) vs. the baseline's 2 (fc, down), so the MLP parameter count increases. With `mlp_mult=2`, the baseline has `2 x dim^2` MLP parameters, while SwiGLU has `3 x dim^2` -- a 50% increase in MLP parameters.
+Note: SwiGLU uses 3 projection matrices (gate, up, down) vs. the baseline's 2 (fc, down), so the MLP parameter count increases. With `mlp_mult=2` and hidden=2×dim, the baseline has `2 × dim × 2×dim = 4 x dim^2` MLP parameters, while SwiGLU has `3 × dim × 2×dim = 6 x dim^2` -- a 50% increase in MLP parameters.
 
 ## Key Differences from Baseline
 
@@ -25,7 +25,7 @@ Note: SwiGLU uses 3 projection matrices (gate, up, down) vs. the baseline's 2 (f
 |---|---|---|
 | MLP activation | GELU | SwiGLU (SiLU gating) |
 | MLP projections | fc (dim->2xdim), down_proj | gate_proj, up_proj (dim->2xdim each), down_proj |
-| MLP parameter count | 2 x dim^2 | 3 x dim^2 (+50%) |
+| MLP parameter count | 4 x dim^2 | 6 x dim^2 (+50%) |
 
 ## Results
 

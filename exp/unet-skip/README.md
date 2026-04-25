@@ -16,7 +16,7 @@ This experiment adds **U-Net skip connections** with learnable skip_weights. The
 | Component | Baseline | U-Net Skip |
 |---|---|---|
 | Skip connections | None | Encoder→decoder with learnable weights |
-| Additional params | 0 | `num_skips` scalar weights |
+| Additional params | 0 | `num_skips` per-dimension skip_weight vectors (shape: `num_skips × model_dim`) |
 
 ## Key Differences from Baseline
 
@@ -45,7 +45,7 @@ U-Net skip connections deliver a consistent -0.015 to -0.018 BPB improvement acr
 
 The mechanism is straightforward: each decoder layer receives a scaled copy of its paired encoder layer's output, creating direct information highways that bypass the intermediate residual stream. This addresses two weaknesses of sequential Transformers. First, fine-grained features from early layers are available to later layers without being diluted by successive residual updates. Second, gradient flow during backpropagation benefits from the shorter skip paths, improving optimization in the encoder half.
 
-The overhead is negligible: 2,048 additional scalar parameters (one per skip per feature dimension), zero memory increase, and only a 1.2% wall-clock slowdown. The slight throughput reduction (1.7% fewer tokens in fixed compute) is more than offset by the per-token quality gain, as evidenced by the lower BPB despite fewer tokens processed.
+The overhead is negligible: 2,048 additional parameters (one per feature dimension per skip), zero memory increase, and only a 1.2% wall-clock slowdown. The slight throughput reduction (1.7% fewer tokens in fixed compute) is more than offset by the per-token quality gain, as evidenced by the lower BPB despite fewer tokens processed.
 
 The learnable skip weights are initialized to 1.0, giving the model full skip throughput at the start of training and letting it dial back individual skips as needed. This means the architecture can gracefully regress toward baseline behavior for any skip that does not help, while retaining the ones that do.
 

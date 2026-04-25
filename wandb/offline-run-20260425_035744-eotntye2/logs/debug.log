@@ -1,0 +1,23 @@
+2026-04-25 03:57:44,530 INFO    MainThread:2293000 [wandb_setup.py:_flush():81] Current SDK version is 0.25.1
+2026-04-25 03:57:44,530 INFO    MainThread:2293000 [wandb_setup.py:_flush():81] Configure stats pid to 2293000
+2026-04-25 03:57:44,530 INFO    MainThread:2293000 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2026-04-25 03:57:44,530 INFO    MainThread:2293000 [wandb_init.py:setup_run_log_directory():717] Logging user logs to /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/wandb/offline-run-20260425_035744-eotntye2/logs/debug.log
+2026-04-25 03:57:44,530 INFO    MainThread:2293000 [wandb_init.py:setup_run_log_directory():718] Logging internal logs to /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/wandb/offline-run-20260425_035744-eotntye2/logs/debug-internal.log
+2026-04-25 03:57:44,530 INFO    MainThread:2293000 [wandb_init.py:init():844] calling init triggers
+2026-04-25 03:57:44,531 INFO    MainThread:2293000 [wandb_init.py:init():849] wandb.init called with sweep_config: {}
+config: {'data_path': './data/datasets/fineweb10B_sp1024', 'train_files': './data/datasets/fineweb10B_sp1024/fineweb_train_*.bin', 'val_files': './data/datasets/fineweb10B_sp1024/fineweb_val_*.bin', 'tokenizer_path': './data/tokenizers/fineweb_1024_bpe.model', 'run_id': 'experiment-20260425-035718-relu-sq-fixed_time_10min', 'output_dir': '/inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/relu-sq/logs/experiment-20260425-035718/relu-sq-fixed_time_10min', 'experiment_name': 'relu-sq-fixed_time_10min', 'control_mode': 'fixed_compute', 'target_train_tokens': 0, 'seed': 1337, 'val_batch_size': 524288, 'val_loss_every': 1000, 'train_log_every': 200, 'iterations': 1000000, 'warmdown_iters': 1500, 'warmup_steps': 50, 'train_batch_tokens': 524288, 'train_seq_len': 1024, 'max_wallclock_seconds': 600.0, 'vocab_size': 1024, 'num_layers': 9, 'num_kv_heads': 4, 'model_dim': 512, 'num_heads': 8, 'mlp_mult': 2, 'tie_embeddings': True, 'rope_base': 10000.0, 'embed_lr': 0.6, 'head_lr': 0.008, 'tied_embed_lr': 0.05, 'matrix_lr': 0.04, 'scalar_lr': 0.04, 'muon_momentum': 0.95, 'muon_backend_steps': 5, 'muon_momentum_warmup_start': 0.85, 'muon_momentum_warmup_steps': 800, 'beta1': 0.9, 'beta2': 0.95, 'adam_eps': 1e-08, 'grad_clip_norm': 0.0, 'enable_wandb': True, 'wandb_project': 'bag-of-tricks-for-transformers', 'wandb_entity': None, 'wandb_run_name': 'experiment-20260425-035718-relu-sq-fixed_time_10min', 'wandb_group': 'experiment-20260425-035718', 'wandb_tags': [], 'wandb_notes': None, 'wandb_mode': 'offline', 'wandb_dir': None, 'wandb_upload_artifacts': False, 'script_name': 'train_gpt.py', 'dataset_dir_name': 'fineweb10B_sp1024', 'actual_train_files': 195, 'world_size': 8, 'grad_accum_steps': 1, 'device_type': 'cuda', 'torch_version': '2.8.0+cu128', 'python_version': '3.12.13', 'model_params': 17039360, '_wandb': {}}
+2026-04-25 03:57:44,531 INFO    MainThread:2293000 [wandb_init.py:init():892] starting backend
+2026-04-25 03:57:44,865 INFO    MainThread:2293000 [wandb_init.py:init():895] sending inform_init request
+2026-04-25 03:57:44,869 INFO    MainThread:2293000 [wandb_init.py:init():903] backend started and connected
+2026-04-25 03:57:44,938 INFO    MainThread:2293000 [wandb_init.py:init():973] updated telemetry
+2026-04-25 03:57:44,942 INFO    MainThread:2293000 [wandb_init.py:init():997] communicating run to backend with 90.0 second timeout
+2026-04-25 03:57:45,208 INFO    MainThread:2293000 [wandb_init.py:init():1042] starting run threads in backend
+2026-04-25 03:57:45,263 INFO    MainThread:2293000 [wandb_run.py:_console_start():2524] atexit reg
+2026-04-25 03:57:45,263 INFO    MainThread:2293000 [wandb_run.py:_redirect():2373] redirect: wrap_raw
+2026-04-25 03:57:45,263 INFO    MainThread:2293000 [wandb_run.py:_redirect():2442] Wrapping output streams.
+2026-04-25 03:57:45,263 INFO    MainThread:2293000 [wandb_run.py:_redirect():2465] Redirects installed.
+2026-04-25 03:57:45,266 INFO    MainThread:2293000 [wandb_init.py:init():1082] run started, returning control to user process
+2026-04-25 04:08:29,371 INFO    MainThread:2293000 [wandb_run.py:_finish():2291] finishing run bag-of-tricks-for-transformers/eotntye2
+2026-04-25 04:08:29,385 INFO    MainThread:2293000 [wandb_run.py:_atexit_cleanup():2490] got exitcode: 0
+2026-04-25 04:08:29,385 INFO    MainThread:2293000 [wandb_run.py:_restore():2472] restore
+2026-04-25 04:08:29,385 INFO    MainThread:2293000 [wandb_run.py:_restore():2478] restore done
