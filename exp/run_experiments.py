@@ -36,6 +36,10 @@ ENV_KEY_MAP = {
     "rope_base": "ROPE_BASE",
     # trick: partial-rope — rotate only first N head dims (parameter-golf 1.1248)
     "rope_dims": "ROPE_DIMS",
+    # trick: attention-residuals
+    "attn_res_enabled": "ATTN_RES_ENABLED",
+    "attn_res_num_blocks": "ATTN_RES_NUM_BLOCKS",
+    "attn_res_recency_bias_init": "ATTN_RES_RECENCY_BIAS_INIT",
     "logit_softcap": "LOGIT_SOFTCAP",
     "embed_lr": "EMBED_LR",
     "head_lr": "HEAD_LR",
