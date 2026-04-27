@@ -40,29 +40,29 @@ KV source mapping: layer 7 → layer 0's KV, layer 8 → layer 1's KV.
 
 | Regime | Metric | Baseline | KV Sharing + Double-Wide MLP | Delta |
 |---|---|---|---|---|
-| Fixed Compute (10 min) | Val BPB | 1.2979 | 1.2905 | **-0.0074** |
-| Fixed Compute (10 min) | Val Loss | 2.1914 | 2.1789 | -0.0125 |
-| Fixed Compute (10 min) | Train Tokens | 7.67B | 7.47B | -2.6% |
+| Fixed Compute (10 min) | Val BPB | 1.2938 | 1.2954 | **+0.0016** |
+| Fixed Compute (10 min) | Val Loss | 2.1845 | 2.1873 | +0.0028 |
+| Fixed Compute (10 min) | Train Tokens | 7.63B | 7.45B | -2.4% |
 | Fixed Compute (10 min) | Peak Memory | 8,389 MiB | 8,654 MiB | +265 MiB |
-| Fixed Tokens (10B) | Val BPB | 1.2857 | 1.2823 | **-0.0034** |
-| Fixed Tokens (10B) | Val Loss | 2.1709 | 2.1651 | -0.0058 |
-| Fixed Tokens (10B) | Wall-clock | 772s | 794s | +2.8% |
+| Fixed Tokens (10B) | Val BPB | 1.2847 | 1.2763 | **-0.0084** |
+| Fixed Tokens (10B) | Val Loss | 2.1692 | 2.1550 | -0.0142 |
+| Fixed Tokens (10B) | Wall-clock | 771s | 789s | +2.3% |
 | Fixed Tokens (10B) | Peak Memory | 8,389 MiB | 8,654 MiB | +265 MiB |
 | -- | Total Params | 17.04M | 18,612,224 (18.61M) | +1,572,864 (+9.2%) |
 
 ## Analysis
 
-KV sharing + double-wide MLP provides a **consistent improvement** across both evaluation regimes: -0.0074 BPB under fixed-compute and -0.0034 BPB under fixed-tokens.
+KV sharing + double-wide MLP shows a **mixed result**: slightly worse under fixed-compute (+0.0016 BPB) but substantially better under fixed-tokens (-0.0084 BPB).
 
-**Attention-to-MLP parameter reallocation works**: The shared K/V mechanism reduces attention parameter count for the shared layers (7 and 8), while the double-wide MLP compensates by adding more feed-forward capacity. This trades attention diversity for MLP expressivity. Under fixed-compute, the model processes 2.6% fewer tokens yet still achieves a -0.0074 BPB improvement, indicating that the wider MLP provides meaningful per-token quality gains that more than offset the throughput reduction. Under fixed-tokens, the -0.0034 BPB improvement confirms the sample efficiency gain is genuine.
+**FC regression is real but small**: Under fixed-compute, the model processes 2.4% fewer tokens due to throughput reduction from the wider MLP layers, yielding a small +0.0016 BPB regression. The wider MLP provides meaningful per-token quality gains, but these do not fully compensate for the throughput reduction in the fixed-time regime.
 
-**Cross-layer KV sharing is viable**: The shared K/V approach is inspired by GQA (Grouped Query Attention) taken further -- instead of just sharing K/V heads within a layer, K/V are shared across specific layers entirely, eliminating redundant key/value projections. Layers 7 and 8 reuse KV projections from layers 0 and 1 respectively, and the consistent improvement indicates the shared representations are not a bottleneck: early and late layers learn sufficiently compatible key/value distributions.
+**Strong FT improvement**: Under fixed-tokens, the trick achieves a substantial -0.0084 BPB improvement. This demonstrates that the parameter reallocation from attention (shared KV) to MLP capacity is genuinely beneficial for sample efficiency -- the model simply needs enough data to capitalize on the extra MLP expressivity. The wider MLP in later layers provides meaningful representational benefits when data is abundant.
 
-**Diminishing returns under fixed-tokens**: The improvement is meaningful under fixed-compute (-0.007 BPB) despite only a 2.6% token reduction, suggesting the parameter reallocation from attention to MLP is beneficial. Under fixed-tokens, the improvement is smaller (-0.003 BPB) -- the extra MLP capacity provides diminishing returns when the model has enough compute to train all parameters adequately.
+**Cross-layer KV sharing is viable**: The shared K/V mechanism maps layers 7->0 and 8->1, eliminating redundant key/value projections while the double-wide MLP compensates with additional feed-forward capacity. The strong FT result indicates that early and late layers develop sufficiently compatible key/value distributions for shared projections to work well. The shared KV projections receive gradient updates from both source and consumer layers, which may provide beneficial implicit regularization.
 
-**Improvement per added parameter is modest**: The +1.57M param overhead is significant (+9.2% more params). While the trick works, the improvement per added parameter is modest compared to simpler tricks like untie-embed, which achieves comparable or better BPB gains with far fewer additional parameters. The 2.8% wall-clock overhead in fixed-tokens is modest given the parameter increase, since the wider MLP in only 2 of 9 layers has limited impact on total FLOPs and KV sharing slightly reduces attention-path computation. Memory increases by 265 MiB.
+**Parameter efficiency context**: The +1.57M param overhead is significant (+9.2% more params). The improvement per added parameter is reasonable under FT (-0.0084 BPB for 9.2% more params) but the FC regression suggests the parameter budget is better spent when given sufficient training tokens. Memory increases by 265 MiB and wall-clock by 2.3% in FT.
 
-**Conclusion**: KV sharing + double-wide MLP is viable when the parameter budget allows the extra MLP width. The trick provides consistent but modest improvements (-0.007 FC BPB, -0.003 FT BPB) at the cost of +1.57M params and +2.8% wall-clock. For parameter-constrained settings, simpler tricks likely offer better efficiency.
+**Conclusion**: KV sharing + double-wide MLP is a legitimate sample-efficiency trick -- it improves quality per training token (-0.0084 FT BPB) but at a slight cost in training throughput (+0.0016 FC BPB). The trick is appropriate when ample data and parameter budget are available. For compute-constrained settings, simpler tricks with less overhead may be preferred.
 
 ## Files
 

@@ -29,26 +29,28 @@ This experiment adds a **learnable per-head Q-Gain** parameter that scales query
 
 | Regime | Metric | Baseline | Q-Gain | Delta |
 |---|---|---|---|---|
-| Fixed Compute (10 min) | Val BPB | 1.2979 | 1.2834 | **-0.0145** |
-| Fixed Compute (10 min) | Val Loss | 2.1914 | 2.1670 | -0.0244 |
-| Fixed Compute (10 min) | Train Tokens | 7.67B | 7.56B | -1.4% |
+| Fixed Compute (10 min) | Val BPB | 1.2938 | 1.2842 | **-0.0096** |
+| Fixed Compute (10 min) | Val Loss | 2.1845 | 2.1683 | -0.0162 |
+| Fixed Compute (10 min) | Train Tokens | 7.63B | 7.55B | -1.0% |
 | Fixed Compute (10 min) | Peak Memory | 8,389 MiB | 8,965 MiB | +576 MiB |
-| Fixed Tokens (10B) | Val BPB | 1.2857 | 1.2721 | **-0.0136** |
-| Fixed Tokens (10B) | Val Loss | 2.1709 | 2.1479 | -0.0230 |
-| Fixed Tokens (10B) | Wall-clock | 772s | 779s | +0.9% |
+| Fixed Tokens (10B) | Val BPB | 1.2847 | 1.2755 | **-0.0092** |
+| Fixed Tokens (10B) | Val Loss | 2.1692 | 2.1536 | -0.0156 |
+| Fixed Tokens (10B) | Wall-clock | 771s | 778s | +0.9% |
 | — | Total Params | 17,039,360 | 17,039,432 | +72 |
 
 ## Analysis
 
-Q-Gain delivers a **consistent -0.014 BPB improvement** across both fixed-compute and fixed-token regimes with only 72 additional parameters (+0.0004%).
+Q-Gain delivers a **consistent -0.009 to -0.010 BPB improvement** across both fixed-compute and fixed-token regimes with only 72 additional parameters (+0.0004%).
 
 The 1.5 initialization is the critical design choice. After QK-Norm and RoPE, query magnitudes are attenuated, which flattens the attention distribution and limits the model's ability to form sharp, selective attention patterns. Initializing the gain above 1.0 counteracts this attenuation from the first training step, giving each head a head start on calibrating its attention sharpness. The per-head granularity then lets individual heads converge to their own optimal scale rather than sharing a single global factor.
 
-The +576 MiB memory overhead is disproportionately large for 72 scalar parameters. This arises because Muon (the optimizer used for 2D+ parameters) cannot handle 1D tensors, so the gain scalars are routed to Adam instead. The extra memory comes from Adam's dual momentum states for these parameters, not from the parameters themselves.
+The +576 MiB memory overhead is disproportionately large for 72 scalar parameters. A quick calculation rules out optimizer states as the cause: 72 float32 scalars in Adam (parameter + m + v = 12 bytes each) total ~864 bytes -- irrelevant at this scale. Instead, 576 MiB precisely equals the size of one bf16 Q-activation tensor per layer (per-GPU micro-batch of 64 sequences, num_heads=8, seq_len=1024, head_dim=64: 64 MiB per layer x 9 layers).
 
-The 1.4% throughput reduction under fixed compute is modest and primarily attributable to the memory pressure from the Adam optimizer states described above; the actual forward-pass cost of the gain multiplication is negligible.
+The root cause is an interaction between `torch.compile(fullgraph=True)` and the `q = q * q_gain[None, :, None, None]` multiplication. In the baseline, post-RoPE Q feeds directly into `scaled_dot_product_attention`; the compiled graph keeps one copy of Q alive for the SDPA backward. With q_gain, the autograd graph forks: the pre-multiplication Q must be saved to compute the gradient w.r.t. `q_gain` (the chain rule for `grad_q_gain` requires the pre-gain Q value), while the post-multiplication Q (a numerically different tensor due to per-head scaling) feeds SDPA and is needed by its backward kernel. Under `torch.compile(fullgraph=True)`, the compiler materializes both copies, doubling the per-layer Q activation storage for a net increase of ~64 MiB per layer.
 
-**Verdict**: Q-Gain is a high-signal, low-complexity trick. The per-head query scaling mechanism addresses a real architectural weakness (post-norm magnitude collapse), and the 1.5 initialization is well-matched to this model configuration. The memory overhead from optimizer routing is a minor practical concern.
+The 1.0% throughput reduction under fixed compute is modest and attributable to this additional memory pressure reducing the number of training steps that fit within the 10-minute wall-clock budget; the actual forward-pass cost of the gain multiplication is negligible.
+
+**Verdict**: Q-Gain is a high-signal, low-complexity trick. The per-head query scaling mechanism addresses a real architectural weakness (post-norm magnitude collapse), and the 1.5 initialization is well-matched to this model configuration. The +576 MiB memory overhead is a graph-level artifact from storing the pre-gain Q activation for autograd -- not an optimizer issue -- and could be avoided by fusing the gain into the attention computation rather than applying it as a separate tensor operation.
 
 ## Files
 

@@ -18,8 +18,8 @@ Naive architecture GPT with strong training recipe. Architecture is standard (no
 
 | Regime | Val BPB | Val Loss | Train Tokens | Wall-clock | Peak Memory |
 |---|---|---|---|---|---|
-| Fixed Compute (10 min) | 1.2979 | 2.1914 | 7.67B | 600s | 8,389 MiB |
-| Fixed Tokens (10B) | 1.2857 | 2.1709 | 10.00B | 772s | 8,389 MiB |
+| Fixed Compute (10 min) | 1.2938 | 2.1845 | 7.63B | 600s | 8,389 MiB |
+| Fixed Tokens (10B) | 1.2847 | 2.1692 | 10.00B | 771s | 8,389 MiB |
 
 | Model | Params | Dim | Heads | KV Heads | MLP Mult | Layers |
 |---|---|---|---|---|---|---|

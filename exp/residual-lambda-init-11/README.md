@@ -37,18 +37,18 @@ From **slowrun T08 ResidualLambdaInit11**. The slowrun tiny-track change initial
 
 | Regime | Metric | Baseline | Residual-Lambda-Init-11 | Delta |
 |---|---|---|---|---|
-| Fixed Compute (10 min) | Val BPB | 1.2979 | 1.2632 | **-0.0347** |
-| Fixed Compute (10 min) | Val Loss | 2.1914 | 2.1328 | -0.0586 |
-| Fixed Compute (10 min) | Train Tokens | 7.67B | 7.25B | -5.5% |
+| Fixed Compute (10 min) | Val BPB | 1.2938 | 1.2611 | **-0.0327** |
+| Fixed Compute (10 min) | Val Loss | 2.1845 | 2.1294 | -0.0551 |
+| Fixed Compute (10 min) | Train Tokens | 7.63B | 7.20B | -5.6% |
 | Fixed Compute (10 min) | Peak Memory | 8,389 MiB | 8,391 MiB | +2 MiB |
-| Fixed Tokens (10B) | Val BPB | 1.2857 | 1.2525 | **-0.0332** |
-| Fixed Tokens (10B) | Val Loss | 2.1709 | 2.1148 | -0.0561 |
-| Fixed Tokens (10B) | Wall-clock | 772s | 814s | +5.4% |
-| — | Total Params | 17.04M | 17.04M | +9,216 |
+| Fixed Tokens (10B) | Val BPB | 1.2847 | 1.2537 | **-0.0310** |
+| Fixed Tokens (10B) | Val Loss | 2.1692 | 2.1167 | -0.0525 |
+| Fixed Tokens (10B) | Wall-clock | 771s | 816s | +5.8% |
+| — | Total Params | 17.04M | 17.05M | +9,216 |
 
 ## Analysis
 
-Residual-lambda-init-11 is a top-tier trick, delivering -0.035 BPB under fixed compute and -0.033 BPB under fixed tokens. These gains are nearly identical to resid-mix, which is expected: both tricks expose the same x0-mixing mechanism, differing only in how the coefficients are initialized.
+Residual-lambda-init-11 is a top-tier trick, delivering -0.033 BPB under fixed compute and -0.031 BPB under fixed tokens. These gains are nearly identical to resid-mix, which is expected: both tricks expose the same x0-mixing mechanism, differing only in how the coefficients are initialized.
 
 The central insight is that **the mechanism matters more than the initialization**. Resid-mix starts at [1.0, 0.0] (no x0 access at step 0), while this variant starts at [1.1, 0.1] (slight x0 access from step 0). Both converge to similar final quality, indicating the model learns the optimal mixing ratio during training regardless of where it starts.
 

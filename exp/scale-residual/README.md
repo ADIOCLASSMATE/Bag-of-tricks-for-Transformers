@@ -29,24 +29,24 @@ This experiment adds **learnable per-dimension scaling** on attention and MLP re
 
 | Regime | Metric | Baseline | Scale-Residual | Delta |
 |---|---|---|---|---|
-| Fixed Compute (10 min) | Val BPB | 1.2979 | 1.2808 | **-0.0171** |
-| Fixed Compute (10 min) | Val Loss | 2.1914 | 2.1626 | -0.0288 |
-| Fixed Compute (10 min) | Train Tokens | 7.67B | 7.35B | -4.2% |
+| Fixed Compute (10 min) | Val BPB | 1.2938 | 1.2841 | **-0.0097** |
+| Fixed Compute (10 min) | Val Loss | 2.1845 | 2.1682 | -0.0163 |
+| Fixed Compute (10 min) | Train Tokens | 7.63B | 7.37B | -3.4% |
 | Fixed Compute (10 min) | Peak Memory | 8,389 MiB | 9,287 MiB | +10.7% |
-| Fixed Tokens (10B) | Val BPB | 1.2857 | 1.2734 | **-0.0123** |
-| Fixed Tokens (10B) | Val Loss | 2.1709 | 2.1501 | -0.0208 |
-| Fixed Tokens (10B) | Wall-clock | 772s | 803s | +4.0% |
+| Fixed Tokens (10B) | Val BPB | 1.2847 | 1.2667 | **-0.0180** |
+| Fixed Tokens (10B) | Val Loss | 2.1692 | 2.1388 | -0.0304 |
+| Fixed Tokens (10B) | Wall-clock | 771s | 796s | +3.2% |
 | — | Total Params | 17,039,360 | 17,048,576 | +9,216 |
 
 ## Analysis
 
-Scale-residual delivers consistent BPB improvements across both evaluation regimes (-0.017 FC, -0.012 FT), ranking it among the stronger tricks tested. The gains come from per-dimension learnable scaling that lets each residual channel independently control sub-layer contribution strength, a strictly more expressive parameterization than a single scalar per sub-layer.
+Scale-residual delivers strong BPB improvements across both evaluation regimes (-0.010 FC, -0.018 FT), ranking it among the most effective tricks tested. The gains come from per-dimension learnable scaling that lets each residual channel independently control sub-layer contribution strength, a strictly more expressive parameterization than a single scalar per sub-layer.
 
-The memory overhead is the main drawback. The +898 MiB increase is disproportionate to the +9,216 parameters (approximately 36 KiB of weights) because Muon treats these as scalar parameters and maintains spectral momentum states that are far larger than the parameters themselves. This optimizer-side amplification turns a negligible parameter cost into a meaningful memory penalty.
+The memory overhead is the main drawback. The +898 MiB increase is disproportionate to the +9,216 parameters (approximately 36 KiB of weights) because the optimizer maintains additional state for these scalar parameters. Note that `attn_scale` and `mlp_scale` are routed to the Adam optimizer (via `CONTROL_TENSOR_NAME_PATTERNS` matching their names as scalar_params), not Muon, so the memory amplification comes from Adam's first/second moment buffers rather than Muon's spectral momentum states. This optimizer-side overhead turns a negligible parameter cost into a meaningful memory penalty.
 
-The FC improvement (-0.017) exceeds FT (-0.012), suggesting the per-dimension scales are most impactful during early training when the model is calibrating the residual-sublayer balance. By the time 10B tokens are consumed, this advantage has partially compressed, indicating the scales converge toward stable values relatively early.
+The FT improvement (-0.018 BPB) is nearly double the FC improvement (-0.010 BPB), indicating the per-dimension scales continue to provide value with sustained training. Rather than converging early and saturating, the learnable scales appear to become more beneficial as the model sees more data -- each residual dimension benefits from increasingly refined calibration of sub-layer contribution strength over the full 10B token budget.
 
-**Verdict**: Effective but memory-expensive. The quality gains are real and consistent, but the Muon-driven memory overhead makes this less practical than alternatives (e.g., U-Net skip connections) that achieve similar improvements with near-zero overhead.
+**Verdict**: Effective but memory-expensive. The quality gains are real and scale with training duration (-0.018 FT BPB, among the strongest results), but the optimizer-state memory overhead (+898 MiB) makes this less practical than alternatives that achieve similar improvements with near-zero overhead.
 
 ## Files
 

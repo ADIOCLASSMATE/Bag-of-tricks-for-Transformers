@@ -30,22 +30,22 @@ This experiment adds **U-Net skip connections** with learnable skip_weights. The
 
 | Regime | Metric | Baseline | U-Net Skip | Delta |
 |---|---|---|---|---|
-| Fixed Compute (10 min) | Val BPB | 1.2979 | 1.2803 | **-0.0176** |
-| Fixed Compute (10 min) | Val Loss | 2.1914 | 2.1618 | -0.0296 |
-| Fixed Compute (10 min) | Train Tokens | 7.67B | 7.54B | -1.7% |
+| Fixed Compute (10 min) | Val BPB | 1.2938 | 1.2773 | **-0.0165** |
+| Fixed Compute (10 min) | Val Loss | 2.1845 | 2.1566 | -0.0279 |
+| Fixed Compute (10 min) | Train Tokens | 7.63B | 7.54B | -1.2% |
 | Fixed Compute (10 min) | Peak Memory | 8,389 MiB | 8,389 MiB | 0 |
-| Fixed Tokens (10B) | Val BPB | 1.2857 | 1.2703 | **-0.0154** |
-| Fixed Tokens (10B) | Val Loss | 2.1709 | 2.1448 | -0.0261 |
-| Fixed Tokens (10B) | Wall-clock | 772s | 781s | +1.2% |
+| Fixed Tokens (10B) | Val BPB | 1.2847 | 1.2695 | **-0.0152** |
+| Fixed Tokens (10B) | Val Loss | 2.1692 | 2.1435 | -0.0257 |
+| Fixed Tokens (10B) | Wall-clock | 771s | 780s | +1.2% |
 | — | Total Params | 17,039,360 | 17,041,408 | +2,048 |
 
 ## Analysis
 
-U-Net skip connections deliver a consistent -0.015 to -0.018 BPB improvement across both evaluation regimes, making this one of the strongest single tricks tested.
+U-Net skip connections deliver a consistent -0.015 to -0.0165 BPB improvement across both evaluation regimes, making this one of the strongest single tricks tested.
 
 The mechanism is straightforward: each decoder layer receives a scaled copy of its paired encoder layer's output, creating direct information highways that bypass the intermediate residual stream. This addresses two weaknesses of sequential Transformers. First, fine-grained features from early layers are available to later layers without being diluted by successive residual updates. Second, gradient flow during backpropagation benefits from the shorter skip paths, improving optimization in the encoder half.
 
-The overhead is negligible: 2,048 additional parameters (one per feature dimension per skip), zero memory increase, and only a 1.2% wall-clock slowdown. The slight throughput reduction (1.7% fewer tokens in fixed compute) is more than offset by the per-token quality gain, as evidenced by the lower BPB despite fewer tokens processed.
+The overhead is negligible: 2,048 additional parameters (one per feature dimension per skip), zero memory increase, and only a 1.2% wall-clock slowdown. The slight throughput reduction (1.2% fewer tokens in fixed compute) is more than offset by the per-token quality gain, as evidenced by the lower BPB despite fewer tokens processed.
 
 The learnable skip weights are initialized to 1.0, giving the model full skip throughput at the start of training and letting it dial back individual skips as needed. This means the architecture can gracefully regress toward baseline behavior for any skip that does not help, while retaining the ones that do.
 

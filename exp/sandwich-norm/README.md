@@ -40,23 +40,23 @@ Note: The baseline's `RMSNorm` implementation uses `F.rms_norm` without a learna
 
 | Regime | Metric | Baseline | Sandwich Norm | Delta |
 |---|---|---|---|---|
-| Fixed Compute (10 min) | Val BPB | 1.2979 | 1.2771 | **-0.0208** |
-| Fixed Compute (10 min) | Val Loss | 2.1914 | 2.1563 | -0.0351 |
-| Fixed Compute (10 min) | Train Tokens | 7.67B | 7.50B | -2.2% |
+| Fixed Compute (10 min) | Val BPB | 1.2938 | 1.2757 | **-0.0181** |
+| Fixed Compute (10 min) | Val Loss | 2.1845 | 2.1540 | -0.0305 |
+| Fixed Compute (10 min) | Train Tokens | 7.63B | 7.45B | -2.4% |
 | Fixed Compute (10 min) | Peak Memory | 8,389 MiB | 9,289 MiB | +10.7% |
 | Fixed Compute (10 min) | Wall-clock | 600s | 600s | — |
-| Fixed Tokens (10B) | Val BPB | 1.2857 | 1.2670 | **-0.0187** |
-| Fixed Tokens (10B) | Val Loss | 2.1709 | 2.1392 | -0.0317 |
-| Fixed Tokens (10B) | Wall-clock | 772s | 788s | +2.1% |
+| Fixed Tokens (10B) | Val BPB | 1.2847 | 1.2656 | **-0.0191** |
+| Fixed Tokens (10B) | Val Loss | 2.1692 | 2.1370 | -0.0322 |
+| Fixed Tokens (10B) | Wall-clock | 771s | 790s | +2.5% |
 | — | Total Params | 17.04M | 17.04M | 0 |
 
 ## Analysis
 
-Sandwich norm improves validation BPB by 0.021 (fixed-compute) and 0.019 (fixed-tokens), with consistent loss reductions across both regimes. The gains come from constraining each sub-layer output to unit variance via post-normalization before it enters the residual stream, which prevents unbounded magnitude growth and homogenizes the effective learning rate across layers.
+Sandwich norm improves validation BPB by 0.018 (fixed-compute) and 0.019 (fixed-tokens), with consistent loss reductions across both regimes. The gains come from constraining each sub-layer output to unit variance via post-normalization before it enters the residual stream, which prevents unbounded magnitude growth and homogenizes the effective learning rate across layers.
 
 The improvement indicates that even at 9 layers, the residual stream can accumulate enough magnitude variance to harm optimization. The baseline has no mechanism to control sub-layer output magnitudes, so explicit RMSNorm after each sub-layer provides a significant benefit.
 
-The overhead is modest: +900 MiB peak memory (from the extra RMSNorm buffers) and +2.1% wall-clock time in the fixed-tokens regime. Under fixed-compute, throughput drops only 2.2% (7.50B vs 7.67B tokens), and the BPB improvement more than compensates. The post-norm layers add zero parameters since the baseline's RMSNorm uses no learnable affine weight.
+The overhead is modest: +900 MiB peak memory (from the extra RMSNorm buffers) and +2.5% wall-clock time in the fixed-tokens regime. Under fixed-compute, throughput drops only 2.4% (7.45B vs 7.63B tokens), and the BPB improvement more than compensates. The post-norm layers add zero parameters since the baseline's RMSNorm uses no learnable affine weight.
 
 **Verdict**: Sandwich norm is a clear net positive at this scale -- meaningful accuracy gain, zero parameter overhead, and negligible compute cost. The result supports the Gemma design rationale that post-normalization improves residual stream dynamics regardless of depth.
 

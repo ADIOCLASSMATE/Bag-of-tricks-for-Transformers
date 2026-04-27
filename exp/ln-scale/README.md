@@ -38,18 +38,18 @@ From **parameter-golf A09 LNScale**. The reported idea is to damp activation mag
 
 | Regime | Metric | Baseline | LN-Scale | Delta |
 |---|---|---|---|---|
-| Fixed Compute (10 min) | Val BPB | 1.2979 | 1.3118 | +0.0139 |
-| Fixed Compute (10 min) | Val Loss | 2.1914 | 2.2149 | +0.0235 |
-| Fixed Compute (10 min) | Train Tokens | 7.67B | 7.58B | -1.2% |
+| Fixed Compute (10 min) | Val BPB | 1.2938 | 1.3153 | +0.0215 |
+| Fixed Compute (10 min) | Val Loss | 2.1845 | 2.2209 | +0.0364 |
+| Fixed Compute (10 min) | Train Tokens | 7.63B | 7.63B | +0.0% |
 | Fixed Compute (10 min) | Peak Memory | 8,389 MiB | 8,389 MiB | 0 |
-| Fixed Tokens (10B) | Val BPB | 1.2857 | 1.2923 | +0.0066 |
-| Fixed Tokens (10B) | Val Loss | 2.1709 | 2.1821 | +0.0112 |
-| Fixed Tokens (10B) | Wall-clock | 772s | 776s | +0.5% |
+| Fixed Tokens (10B) | Val BPB | 1.2847 | 1.2941 | +0.0094 |
+| Fixed Tokens (10B) | Val Loss | 2.1692 | 2.1851 | +0.0159 |
+| Fixed Tokens (10B) | Wall-clock | 771s | 771s | +0.0% |
 | -- | Total Params | 17.04M | 17.04M | 0 |
 
 ## Analysis
 
-LN-Scale degrades quality across both evaluation regimes (+0.014 BPB fixed-compute, +0.007 BPB fixed-tokens). The `1/sqrt(l+1)` damping factor is counterproductive at this depth.
+LN-Scale degrades quality across both evaluation regimes (+0.022 BPB fixed-compute, +0.009 BPB fixed-tokens). The `1/sqrt(l+1)` damping factor is counterproductive at this depth.
 
 The root cause is over-damping. At the deepest layer (index 8), the scale drops to `1/sqrt(9) ≈ 0.333`, attenuating normalized activations by roughly 67%. Residual contributions from later blocks shrink proportionally, effectively reducing the model's functional depth. Earlier layers are also attenuated but less severely (e.g., layer 0 retains full scale, layer 4 gets `1/sqrt(5) ≈ 0.447`).
 

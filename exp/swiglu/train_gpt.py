@@ -1,29 +1,6 @@
 """
-Naive architecture GPT with strong training recipe + SwiGLU MLP.
-
-Trick: SwiGLU -- gated SiLU (as in LLaMA/Mistral).
-Replaces the standard proj(gelu(fc(x))) MLP with down_proj(silu(gate_proj(x)) * up_proj(x)).
-
-
-Architecture is standard (no tricks): GQA, RoPE, RMSNorm (no learnable weight), QK-Norm, Tied Embeddings,
-CastedLinear, restore_low_dim_params_to_fp32.
-
-Training recipe borrows from modded-nanogpt:
-  - Muon optimizer for matrix params, Adam for scalar/embed params with separate LRs
-  - Muon momentum warmup
-  - No weight decay, no grad clip
-  - JIT warmup with state reset
-
-Removed architectural tricks (vs baseline-sp1024):
-  - U-Net skip connections → standard sequential blocks
-  - ReLU^2 MLP → GELU
-  - Q-Gain → removed
-  - Learnable resid_mix → standard residual x + sublayer(x)
-  - Learnable attn_scale/mlp_scale → standard residual
-  - Logit softcap → raw logits
-  - Input RMSNorm on embedding → removed
-  - Zero-init for output projections → default init
-  - Small embedding init (std=0.005) → default nn.Embedding init
+SwiGLU MLP experiment — replaces GELU MLP with SwiGLU (SiLU-gated MLP, LLaMA/Mistral style).
+Same architecture as baseline except MLP uses gate/up/down projections with F.silu gate.
 """
 
 from __future__ import annotations

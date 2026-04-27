@@ -86,33 +86,33 @@ parameter-golf record) and differ only in the control regime:
 
 ## Results
 
-Parameter count is unchanged at 17,039,360.
+Parameter count is unchanged at 17,039,360 (17.04M).
 
 ### Fixed Compute (600 s wall-clock)
 
 | Metric | Baseline | partial-rope-16 | Delta |
 |---|---|---|---|
-| **Val BPB** | 1.2979 | 1.3011 | +0.0032 |
-| Val Loss | 2.1914 | 2.1968 | +0.0054 |
-| Train Tokens | 7.67 B | 7.78 B | +1.4 % |
+| **Val BPB** | 1.2938 | 1.3022 | +0.0084 |
+| Val Loss | 2.1845 | 2.1987 | +0.0142 |
+| Train Tokens | 7.63 B | 7.77 B | +1.8 % |
 | Peak Memory | 8 389 MiB | 8 388 MiB | −1 MiB |
 
 ### Fixed Tokens (10 B tokens)
 
 | Metric | Baseline | partial-rope-16 | Delta |
 |---|---|---|---|
-| **Val BPB** | 1.2857 | 1.2921 | +0.0064 |
-| Val Loss | 2.1709 | 2.1817 | +0.0108 |
-| Wall-clock | 772 s | 757 s | −1.9 % |
+| **Val BPB** | 1.2847 | 1.2897 | +0.0050 |
+| Val Loss | 2.1692 | 2.1775 | +0.0083 |
+| Wall-clock | 771 s | 754 s | −2.2 % |
 | Peak Memory | 8 389 MiB | 8 388 MiB | −1 MiB |
 
 ## Analysis
 
-Partial RoPE with 25 % rotation (16 / 64 dims) yields a **small regression** under both control regimes: +0.0032 BPB fixed-compute, +0.0064 BPB fixed-tokens.
+Partial RoPE with 25 % rotation (16 / 64 dims) yields a **clear regression** under both control regimes: +0.0084 BPB fixed-compute, +0.0050 BPB fixed-tokens.
 
 Rotating only 16 of 64 head dimensions frees the remaining 48 dimensions to encode position-invariant content, but at `seq_len = 1024` the loss of positional discrimination across most of the head space outweighs that benefit. Full positional information across all dimensions remains valuable at this sequence length; the position-invariant subspace does not compensate.
 
-The slight throughput gain (1.9 % faster wall-clock, 1.4 % more tokens) from reduced rotation arithmetic is too small to close the quality gap.
+The slight throughput gain (2.2 % faster wall-clock, 1.8 % more tokens) from reduced rotation arithmetic is too small to close the quality gap. Notably, the regression is larger under fixed-compute (+0.0084 BPB) than fixed-tokens (+0.0050 BPB), suggesting that additional training tokens partially mitigate the positional signal loss.
 
 This outcome diverges from the parameter-golf record where partial RoPE improved BPB. That record stacked partial RoPE with LN Scale and other complementary changes; in isolation, partial RoPE may require longer sequence lengths or companion architectural modifications to show a net benefit.
 

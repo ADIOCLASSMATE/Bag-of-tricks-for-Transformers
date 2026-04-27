@@ -31,8 +31,6 @@
         "engram_kernel_size": 4,
         "engram_pad_id": 0,
         "engram_use_tokenizer_compression": 1,
-        "engram_use_hc": 0,
-        "engram_hc_mult": 1,
         "engram_embed_lr": 0.02,
         "tied_embed_lr": 0.05,
         "embed_lr": 0.6,

@@ -38,29 +38,29 @@ From **slowrun A04 AttentionHeadGating**. In slowrun, the gate is context-depend
 
 | Metric | Baseline | attention-head-gating | Delta |
 |---|---|---|---|
-| **Val BPB** | 1.2979 | 1.2888 | **-0.0091** |
-| Val Loss | 2.1914 | 2.1762 | -0.0152 |
-| Train Tokens | 7.67B | 7.38B | -3.8% |
+| **Val BPB** | 1.2938 | 1.2891 | **-0.0047** |
+| Val Loss | 2.1845 | 2.1766 | -0.0079 |
+| Train Tokens | 7.63B | 7.39B | -3.1% |
 | Peak Memory | 8,389 MiB | 8,400 MiB | +11 MiB |
 
 ### Fixed Tokens (10B tokens)
 
 | Metric | Baseline | attention-head-gating | Delta |
 |---|---|---|---|
-| **Val BPB** | 1.2857 | 1.2797 | **-0.0060** |
-| Val Loss | 2.1709 | 2.1607 | -0.0102 |
-| Wall-clock | 772s | 798s | +3.4% |
+| **Val BPB** | 1.2847 | 1.2770 | **-0.0077** |
+| Val Loss | 2.1692 | 2.1562 | -0.0130 |
+| Wall-clock | 771s | 796s | +3.2% |
 | Peak Memory | 8,389 MiB | 8,400 MiB | +11 MiB |
 
-**Total params**: 17,040,224 (17.04M), +864 vs baseline (12 x 8 x 9, negligible)
+**Total params**: 17,039,360 (17.04M), +864 vs baseline (12 x 8 x 9, negligible)
 
 ## Analysis
 
-Attention-head gating provides a **consistent improvement** of -0.0091 BPB under fixed-compute and -0.0060 BPB under fixed-tokens. The per-head, per-position gate allows the model to learn which attention heads are useful at each position. This is a lightweight mechanism (only 864 extra parameters) that acts as a learned attention head router.
+Attention-head gating provides a **consistent improvement** of -0.0047 BPB under fixed-compute and -0.0077 BPB under fixed-tokens. The per-head, per-position gate allows the model to learn which attention heads are useful at each position. This is a lightweight mechanism (only 864 extra parameters) that acts as a learned attention head router.
 
-The gate operates before head merging: each head's output is scaled independently, allowing the model to suppress unhelpful heads at specific positions while amplifying useful ones. The fixed-compute gain is larger because the throughput cost is minimal (only 3.8% fewer tokens), while the per-token quality is meaningfully better. Under fixed-tokens, the improvement remains notable at -0.006 BPB, suggesting the gate provides genuine per-position head selection that the baseline cannot replicate even with more data.
+The gate operates before head merging: each head's output is scaled independently, allowing the model to suppress unhelpful heads at specific positions while amplifying useful ones. The fixed-compute gain is modest (-0.0047 BPB) because the throughput cost is slight (only 3.1% fewer tokens), while the per-token quality is meaningfully better. Under fixed-tokens, the improvement is larger at -0.0077 BPB, suggesting the gate provides genuine per-position head selection that the baseline cannot replicate even with more data.
 
-The consistent improvement across both fixed-compute and fixed-tokens regimes suggests the gating mechanism captures genuine signal rather than overfitting. The improvement comes at near-zero cost: +11 MiB memory, +3.4% wall-clock, +864 parameters. This is a **high value-for-cost trick**: meaningful improvement with negligible overhead.
+The consistent improvement across both fixed-compute and fixed-tokens regimes suggests the gating mechanism captures genuine signal rather than overfitting. The improvement comes at near-zero cost: +11 MiB memory, +3.2% wall-clock, +864 parameters. This is a **high value-for-cost trick**: meaningful improvement with negligible overhead.
 
 ## Files
 

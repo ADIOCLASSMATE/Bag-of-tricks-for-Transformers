@@ -835,7 +835,7 @@ def main() -> None:
         for name, p in block_named_params
         if p.ndim < 2 or any(pattern in name for pattern in CONTROL_TENSOR_NAME_PATTERNS)
     ]
-    # trick: per-layer-residual-input — add GPT-level params to optimizer
+    # trick: per-layer-residual-input — add GPT-level per_layer_model_projection to optimizer
     scalar_params.append(base_model.per_layer_model_projection.weight)
     token_lr = args.tied_embed_lr if args.tie_embeddings else args.embed_lr
     optimizer_tok = torch.optim.Adam(

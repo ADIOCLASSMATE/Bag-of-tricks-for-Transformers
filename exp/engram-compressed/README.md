@@ -1,4 +1,4 @@
-# Engram-Compressed — Engram Memory Branch With Tokenizer Compression
+# Engram-Compressed -- Engram Memory Branch With Tokenizer Compression
 
 ## Method Overview
 
@@ -24,13 +24,13 @@ This variant is derived from the official TinyEngram design in `/inspire/hdd/glo
 
 ## What This Ablation Tests
 
-Whether hash-based vocabulary reduction — mapping the full token vocabulary into a smaller hash space for the n-gram lookup — can match or exceed the quality of the uncompressed engram-core variant while using fewer parameters.
+Whether hash-based vocabulary reduction -- mapping the full token vocabulary into a smaller hash space for the n-gram lookup -- can match or exceed the quality of the uncompressed engram-core variant while using fewer parameters.
 
 ## Impact on Training
 
 - **Parameters**: 17.04M -> 22.62M (+5.58M, +32.7% vs baseline)
 - **Peak memory**: 8,389 MiB -> 10,655 MiB (+2,266 MiB)
-- **Fixed-tokens wall-clock**: 772s -> 978s (+26.7%)
+- **Fixed-tokens wall-clock**: 771s -> 973s (+26.2%)
 
 ## Key Differences from Baseline
 
@@ -38,7 +38,7 @@ Whether hash-based vocabulary reduction — mapping the full token vocabulary in
 |---|---|---|
 | Engram branch | none | **enabled at layers 1, 4, 8** |
 | N-gram hashing | none | **2-gram and 3-gram** |
-| Hash input IDs | — | **compressed canonical token IDs** |
+| Hash input IDs | -- | **compressed canonical token IDs** |
 | Tokenizer compression | none | **enabled** |
 | Hyper-connection | none | none (`hc_mult=1`) |
 | Extra optimizer group | none | **Engram embedding tables use separate Adam LR** |
@@ -49,18 +49,18 @@ Whether hash-based vocabulary reduction — mapping the full token vocabulary in
 
 | Metric | Baseline | engram-compressed | Delta |
 |---|---|---|---|
-| **Val BPB** | 1.2979 | **1.2652** | **-0.0327** |
-| Val Loss | 2.1914 | **2.1362** | -0.0552 |
-| Train Tokens | 7.67B | 6.05B | -1.62B (-21.1%) |
+| **Val BPB** | 1.2938 | **1.2589** | **-0.0349** |
+| Val Loss | 2.1845 | **2.1256** | -0.0589 |
+| Train Tokens | 7.63B | 6.03B | -1.60B (-21.0%) |
 | Peak Memory | 8,389 MiB | 10,655 MiB | +2,266 MiB |
 
 ### Fixed Tokens (10B tokens)
 
 | Metric | Baseline | engram-compressed | Delta |
 |---|---|---|---|
-| **Val BPB** | 1.2857 | **1.2424** | **-0.0433** |
-| Val Loss | 2.1709 | **2.0977** | -0.0732 |
-| Wall-clock time | 772s | 978s | +206s (+26.7%) |
+| **Val BPB** | 1.2847 | **1.2425** | **-0.0422** |
+| Val Loss | 2.1692 | **2.0979** | -0.0713 |
+| Wall-clock time | 771s | 973s | +202s (+26.2%) |
 | Peak Memory | 8,389 MiB | 10,655 MiB | +2,266 MiB |
 
 | | Total Params |
@@ -70,13 +70,13 @@ Whether hash-based vocabulary reduction — mapping the full token vocabulary in
 
 ## Analysis
 
-**Best FT BPB in the entire ablation suite.** The fixed-tokens BPB of 1.2424 (-0.043 vs baseline) is the single largest improvement across all experiments, making engram-compressed the most impactful trick when compute is not the bottleneck.
+**Best FT BPB in the entire ablation suite.** The fixed-tokens BPB of 1.2425 (delta -0.0422 vs baseline) is the single largest FT improvement across all experiments, making engram-compressed the most impactful trick when compute is not the bottleneck. It edges out engram-core's FT delta of -0.0403, confirming that tokenizer compression provides a tangible benefit under fixed-token conditions.
 
-**Compression outperforms the uncompressed variant.** The compressed version achieves better FT quality than engram-core (1.2424 vs 1.2466) with 1.59M fewer parameters. The hash-based vocabulary reduction maps multiple token types into shared hash buckets, which acts as a useful regularizer — the model learns more general n-gram representations rather than overfitting to specific token sequences.
+**Compression outperforms the uncompressed variant under fixed tokens.** The compressed version achieves better FT quality than engram-core (1.2425 vs 1.2444) with 1.59M fewer parameters. The hash-based vocabulary reduction maps multiple token types into shared hash buckets, which acts as a useful regularizer -- the model learns more general n-gram representations rather than overfitting to specific token sequences.
 
-**Compute-limited regime favors the uncompressed variant.** Under fixed compute, engram-core achieves a larger BPB improvement (-0.045 vs -0.033). The larger embedding table in engram-core provides more granular retrieval that helps when the token budget is limited, while the compressed variant processes 21.1% fewer tokens due to higher per-step cost.
+**Compute-limited regime favors the uncompressed variant.** Under fixed compute, engram-core achieves a larger BPB improvement (-0.0429 vs -0.0349). The larger embedding table in engram-core provides more granular retrieval that helps when the token budget is limited, while the compressed variant processes 21.0% fewer tokens due to higher per-step cost.
 
-**Trade-off summary**: Engram-compressed trades a 21.1% throughput reduction and 2,266 MiB additional memory for the strongest per-token quality improvement in the suite. The compression regularizer is a net positive under fixed-token conditions, but the throughput overhead means the uncompressed variant is preferable when wall-clock time is the binding constraint.
+**Trade-off summary**: Engram-compressed trades a 21.0% throughput reduction and 2,266 MiB additional memory for the strongest per-token quality improvement in the suite. The compression regularizer is a net positive under fixed-token conditions, but the throughput overhead means the uncompressed variant is preferable when wall-clock time is the binding constraint.
 
 ## Files
 

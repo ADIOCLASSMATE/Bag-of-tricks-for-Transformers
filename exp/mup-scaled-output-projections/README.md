@@ -45,20 +45,22 @@ scaling), so this trick affects every residual branch in the model.
 
 | Regime | Metric | Baseline | muP-Scaled | Delta |
 |---|---|---|---|---|
-| Fixed Compute (10 min) | Val BPB | 1.2979 | 1.2992 | +0.0013 |
-| Fixed Compute (10 min) | Val Loss | 2.1914 | 2.1937 | +0.0023 |
-| Fixed Compute (10 min) | Train Tokens | 7.67B | 7.62B | -0.7% |
+| Fixed Compute (10 min) | Val BPB | 1.2938 | 1.2977 | **+0.0039** |
+| Fixed Compute (10 min) | Val Loss | 2.1845 | 2.1911 | +0.0066 |
+| Fixed Compute (10 min) | Train Tokens | 7.63B | 7.62B | -0.1% |
 | Fixed Compute (10 min) | Peak Memory | 8,389 MiB | 8,389 MiB | 0 |
-| Fixed Tokens (10B) | Val BPB | 1.2857 | 1.2859 | +0.0002 |
-| Fixed Tokens (10B) | Val Loss | 2.1709 | 2.1712 | +0.0003 |
-| Fixed Tokens (10B) | Wall-clock | 772s | 774s | +0.3% |
+| Fixed Tokens (10B) | Val BPB | 1.2847 | 1.2829 | **-0.0018** |
+| Fixed Tokens (10B) | Val Loss | 2.1692 | 2.1661 | -0.0031 |
+| Fixed Tokens (10B) | Wall-clock | 771s | 772s | +0.1% |
 | — | Total Params | 17.04M | 17.04M | 0 |
 
 ## Analysis
 
 The muP output-projection scaling multiplies all 18 output projection weights by `1/sqrt(2L) ≈ 0.236` at initialization. The intent is to dampen residual-branch amplitude early in training so that deeper stacks do not explode, inspired by muP's width- and depth-aware scaling rules.
 
-The trick is NOT inert — it affects every output projection in the model. However, the small regressions (+0.0013 BPB fixed-compute, +0.0002 BPB fixed-tokens) indicate that this particular depth-scaling factor is slightly suboptimal for this architecture, or that the default PyTorch initialization is already well-tuned for a 9-layer model. The `1/sqrt(2L)` scaling shrinks initial residual contributions by roughly 4.2x, which may be too aggressive for a shallow model where the default Kaiming/Xavier init already produces reasonable residual magnitudes. The trick could still prove beneficial in deeper models where uncontrolled residual growth is more of a concern.
+The trick is NOT inert -- it affects every output projection in the model. Results are regime-dependent: a moderate regression under fixed-compute (+0.0039 BPB) but a mild improvement under fixed-tokens (-0.0018 BPB). The FC regression suggests the `1/sqrt(2L)` scaling (shrinking initial residual contributions by roughly 4.2x) slows early convergence compared to default initialization, hurting quality in the time-limited regime. However, under FT, the slightly dampened residual branches may allow for marginally better long-run convergence when given enough training tokens.
+
+The scaling factor `1/sqrt(18) ≈ 0.236` may be too aggressive for a shallow 9-layer model, where the default Kaiming/Xavier initialization already produces reasonable residual magnitudes. The mild FT improvement hints that some degree of projection downscaling could be beneficial with more data, but the current factor is suboptimal for early training throughput. The trick could still prove beneficial in deeper models where uncontrolled residual growth is more of a concern.
 
 ## Files
 

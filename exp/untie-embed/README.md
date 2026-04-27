@@ -29,19 +29,19 @@ Weight tying forces the embedding and lm_head to share a single weight matrix, c
 
 | Regime | Metric | Baseline | Untie-Embed | Delta |
 |---|---|---|---|---|
-| Fixed Compute (10 min) | Val BPB | 1.2979 | 1.2461 | **-0.0518** |
-| Fixed Compute (10 min) | Val Loss | 2.1914 | 2.1040 | -0.0874 |
-| Fixed Compute (10 min) | Train Tokens | 7.67B | 7.56B | -1.4% |
+| Fixed Compute (10 min) | Val BPB | 1.2938 | 1.2459 | **-0.0479** |
+| Fixed Compute (10 min) | Val Loss | 2.1845 | 2.1036 | -0.0809 |
+| Fixed Compute (10 min) | Train Tokens | 7.63B | 7.66B | +0.4% |
 | Fixed Compute (10 min) | Peak Memory | 8,389 MiB | 8,398 MiB | +9 MiB |
-| Fixed Tokens (10B) | Val BPB | 1.2857 | 1.2398 | **-0.0459** |
-| Fixed Tokens (10B) | Val Loss | 2.1709 | 2.0934 | -0.0775 |
-| Fixed Tokens (10B) | Wall-clock | 772s | 775s | +0.4% |
+| Fixed Tokens (10B) | Val BPB | 1.2847 | 1.2397 | **-0.0450** |
+| Fixed Tokens (10B) | Val Loss | 2.1692 | 2.0932 | -0.0760 |
+| Fixed Tokens (10B) | Wall-clock | 771s | 770s | -0.1% |
 | Fixed Tokens (10B) | Peak Memory | 8,389 MiB | 8,398 MiB | +9 MiB |
 | — | Total Params | 17,039,360 (17.04M) | 17,563,648 (17.56M) | +524,288 (+3.1%) |
 
 ## Analysis
 
-Untying embeddings produces the largest improvement in the ablation suite: -0.052 FC BPB, -0.046 FT BPB with near-zero overhead. However, this improvement conflates two effects that cannot be disentangled from this experiment alone:
+Untying embeddings produces the largest improvement in the ablation suite: -0.0479 FC BPB, -0.0450 FT BPB with near-zero overhead. This is the single best trick by FC BPB delta. However, this improvement conflates two effects that cannot be disentangled from this experiment alone:
 
 1. **Architectural expressiveness**: Tied embeddings force a single matrix to optimize for two conflicting objectives simultaneously. Untying lets each matrix specialize — the separate lm_head focuses on mapping hidden states to vocabulary logits (a classification task), while tok_emb focuses on mapping tokens into the representation space (an encoding task).
 
@@ -49,7 +49,7 @@ Untying embeddings produces the largest improvement in the ablation suite: -0.05
 
 The relative contribution of each effect is unknown without a control experiment (untied with `embed_lr=0.05`). The 12x LR increase is not an arbitrary tuning choice — it is the baseline code's default behavior when `tie_embeddings=False`. This makes the experiment a valid test of "what happens when you untie embeddings using the baseline code," but the improvement cannot be attributed solely to architectural expressiveness.
 
-Despite this caveat, the trick has an excellent quality-to-cost ratio: +0.52M params (+3.1%), +0.4% wall-clock, +9 MiB memory for a 4.0% BPB reduction under fixed compute.
+Despite this caveat, the trick has an excellent quality-to-cost ratio: +0.52M params (+3.1%), negligible wall-clock change (-0.1%), +9 MiB memory for a 3.7% BPB reduction under fixed compute.
 
 ## Files
 
