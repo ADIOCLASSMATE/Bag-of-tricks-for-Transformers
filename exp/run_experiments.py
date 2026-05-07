@@ -347,6 +347,7 @@ def build_run_config(
     env["TARGET_TRAIN_TOKENS"] = str(resolved_control.get("target_train_tokens", 0) or 0)
     env["WANDB_RUN_NAME"] = run_id
     env.setdefault("WANDB_GROUP", batch_id)
+    env.setdefault("WANDB_DIR", str(Path.cwd() / "wandb" / safe_name))
 
     nproc_per_node = int(launcher.get("nproc_per_node", 8))
     master_port_base = int(launcher.get("master_port_base", 29500))
