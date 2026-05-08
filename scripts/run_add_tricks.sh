@@ -36,8 +36,12 @@ TRICKS=(
 
 cd "$PROJECT_DIR"
 
+NPROC=${NPROC:-4}
+WALLCLOCK_SECONDS=${WALLCLOCK_SECONDS:-1200}
+
 echo "========================================"
-echo "=== 8GPU Test Suite: ${#TRICKS[@]} tricks ==="
+echo "=== ${NPROC}GPU Test Suite: ${#TRICKS[@]} tricks ==="
+echo "=== Wallclock: ${WALLCLOCK_SECONDS}s ==="
 echo "=== Started at $(date) ==="
 echo "========================================"
 echo ""
@@ -62,7 +66,7 @@ for trick in "${TRICKS[@]}"; do
 
     # Step 1: Dry-run validation
     echo "--- Dry-run validation ---"
-    if uv run python exp/run_experiments.py "$MANIFEST" --dry-run; then
+    if uv run python exp/run_experiments.py "$MANIFEST" --dry-run --nproc-per-node "$NPROC" --wallclock-seconds "$WALLCLOCK_SECONDS"; then
         echo "--- Dry-run passed ---"
     else
         echo "--- Dry-run FAILED ---"
@@ -73,7 +77,7 @@ for trick in "${TRICKS[@]}"; do
 
     # Step 2: Launch training
     echo "--- Launching training ---"
-    if uv run python exp/run_experiments.py "$MANIFEST"; then
+    if uv run python exp/run_experiments.py "$MANIFEST" --nproc-per-node "$NPROC" --wallclock-seconds "$WALLCLOCK_SECONDS"; then
         echo "--- Training PASSED ---"
         PASSED=$((PASSED + 1))
     else

@@ -117,6 +117,24 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Directory where batch outputs are written (default: <manifest_dir>/logs)",
     )
+    parser.add_argument(
+        "--nproc-per-node",
+        type=int,
+        default=None,
+        help="Override launcher nproc_per_node (e.g. 4 for 4-GPU training)",
+    )
+    parser.add_argument(
+        "--wallclock-seconds",
+        type=float,
+        default=None,
+        help="Override control target_wallclock_seconds for fixed_compute mode",
+    )
+    parser.add_argument(
+        "--target-train-tokens",
+        type=int,
+        default=None,
+        help="Override control target_train_tokens for fixed_tokens / fixed_model mode",
+    )
     return parser.parse_args()
 
 
@@ -314,12 +332,22 @@ def build_run_config(
     batch_id: str,
     output_root: Path,
     manifest_path: Path,
+    nproc_override: int | None = None,
+    wallclock_seconds_override: float | None = None,
+    target_train_tokens_override: int | None = None,
 ) -> dict[str, Any]:
     defaults = require_mapping(manifest.get("defaults"), "defaults")
     launcher = require_mapping(manifest.get("launcher"), "launcher")
     control = require_mapping(experiment.get("control"), "experiments[].control")
     if not control:
         raise ValueError("Each experiment must include a control object")
+
+    if nproc_override is not None:
+        launcher = {**launcher, "nproc_per_node": nproc_override}
+    if wallclock_seconds_override is not None and control.get("mode") == "fixed_compute":
+        control = {**control, "target_wallclock_seconds": wallclock_seconds_override}
+    if target_train_tokens_override is not None and control.get("mode") in ("fixed_tokens", "fixed_model"):
+        control = {**control, "target_train_tokens": target_train_tokens_override}
 
     config = dict(require_mapping(defaults, "defaults"))
     config.update(merge_sections(defaults, experiment, "data"))
@@ -475,7 +503,12 @@ def main() -> int:
     for index, experiment in enumerate(experiments):
         experiment_with_index = deepcopy(experiment)
         experiment_with_index["index"] = index
-        runs_to_execute.append(build_run_config(manifest, experiment_with_index, batch_id, output_root, manifest_path))
+        runs_to_execute.append(build_run_config(
+            manifest, experiment_with_index, batch_id, output_root, manifest_path,
+            nproc_override=args.nproc_per_node,
+            wallclock_seconds_override=args.wallclock_seconds,
+            target_train_tokens_override=args.target_train_tokens,
+        ))
 
     if args.dry_run:
         for run in runs_to_execute:
