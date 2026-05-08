@@ -61,6 +61,22 @@ ENV_KEY_MAP = {
     "beta2": "BETA2",
     "adam_eps": "ADAM_EPS",
     "grad_clip_norm": "GRAD_CLIP_NORM",
+    # trick: partial-key-offset
+    "rope_half_truncate": "ROPE_HALF_TRUNCATE",
+    "key_offset_layers": "KEY_OFFSET_LAYERS",
+    # trick: sparse-attn-gate
+    "attn_gate_dim": "ATTN_GATE_DIM",
+    # trick: paired-head-attention
+    "paired_head_layers": "PAIRED_HEAD_LAYERS",
+    # trick: xsa
+    "xsa_last_n": "XSA_LAST_N",
+    # trick: yarn
+    "use_yarn": "USE_YARN",
+    "yarn_max_len": "YARN_MAX_LEN",
+    # trick: multi-token-prediction
+    "mtp_enabled": "MTP_ENABLED",
+    # trick: factored-embedding
+    "embed_dim": "EMBED_DIM",
     "enable_wandb": "ENABLE_WANDB",
     "wandb_project": "WANDB_PROJECT",
     "wandb_entity": "WANDB_ENTITY",
