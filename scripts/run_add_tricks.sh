@@ -37,7 +37,7 @@ TRICKS=(
 cd "$PROJECT_DIR"
 
 echo "========================================"
-echo "=== 4GPU Test Suite: ${#TRICKS[@]} tricks ==="
+echo "=== 8GPU Test Suite: ${#TRICKS[@]} tricks ==="
 echo "=== Started at $(date) ==="
 echo "========================================"
 echo ""
@@ -51,7 +51,7 @@ for trick in "${TRICKS[@]}"; do
     echo "=== Testing: ${trick} ==="
     echo "========================================"
 
-    MANIFEST="exp/${trick}/${trick}-4gpu.json"
+    MANIFEST="exp/${trick}/${trick}.json"
 
     if [ ! -f "$MANIFEST" ]; then
         echo "ERROR: Manifest not found: ${MANIFEST}"
