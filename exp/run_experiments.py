@@ -36,6 +36,10 @@ ENV_KEY_MAP = {
     "rope_base": "ROPE_BASE",
     # trick: partial-rope — rotate only first N head dims (parameter-golf 1.1248)
     "rope_dims": "ROPE_DIMS",
+    # trick: attention-residuals
+    "attn_res_enabled": "ATTN_RES_ENABLED",
+    "attn_res_num_blocks": "ATTN_RES_NUM_BLOCKS",
+    "attn_res_recency_bias_init": "ATTN_RES_RECENCY_BIAS_INIT",
     "logit_softcap": "LOGIT_SOFTCAP",
     "embed_lr": "EMBED_LR",
     "head_lr": "HEAD_LR",
@@ -57,6 +61,22 @@ ENV_KEY_MAP = {
     "beta2": "BETA2",
     "adam_eps": "ADAM_EPS",
     "grad_clip_norm": "GRAD_CLIP_NORM",
+    # trick: partial-key-offset
+    "rope_half_truncate": "ROPE_HALF_TRUNCATE",
+    "key_offset_layers": "KEY_OFFSET_LAYERS",
+    # trick: sparse-attn-gate
+    "attn_gate_dim": "ATTN_GATE_DIM",
+    # trick: paired-head-attention
+    "paired_head_layers": "PAIRED_HEAD_LAYERS",
+    # trick: xsa
+    "xsa_last_n": "XSA_LAST_N",
+    # trick: yarn
+    "use_yarn": "USE_YARN",
+    "yarn_max_len": "YARN_MAX_LEN",
+    # trick: multi-token-prediction
+    "mtp_enabled": "MTP_ENABLED",
+    # trick: factored-embedding
+    "embed_dim": "EMBED_DIM",
     "enable_wandb": "ENABLE_WANDB",
     "wandb_project": "WANDB_PROJECT",
     "wandb_entity": "WANDB_ENTITY",
@@ -96,6 +116,24 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Directory where batch outputs are written (default: <manifest_dir>/logs)",
+    )
+    parser.add_argument(
+        "--nproc-per-node",
+        type=int,
+        default=None,
+        help="Override launcher nproc_per_node (e.g. 4 for 4-GPU training)",
+    )
+    parser.add_argument(
+        "--wallclock-seconds",
+        type=float,
+        default=None,
+        help="Override control target_wallclock_seconds for fixed_compute mode",
+    )
+    parser.add_argument(
+        "--target-train-tokens",
+        type=int,
+        default=None,
+        help="Override control target_train_tokens for fixed_tokens / fixed_model mode",
     )
     return parser.parse_args()
 
@@ -294,12 +332,22 @@ def build_run_config(
     batch_id: str,
     output_root: Path,
     manifest_path: Path,
+    nproc_override: int | None = None,
+    wallclock_seconds_override: float | None = None,
+    target_train_tokens_override: int | None = None,
 ) -> dict[str, Any]:
     defaults = require_mapping(manifest.get("defaults"), "defaults")
     launcher = require_mapping(manifest.get("launcher"), "launcher")
     control = require_mapping(experiment.get("control"), "experiments[].control")
     if not control:
         raise ValueError("Each experiment must include a control object")
+
+    if nproc_override is not None:
+        launcher = {**launcher, "nproc_per_node": nproc_override}
+    if wallclock_seconds_override is not None and control.get("mode") == "fixed_compute":
+        control = {**control, "target_wallclock_seconds": wallclock_seconds_override}
+    if target_train_tokens_override is not None and control.get("mode") in ("fixed_tokens", "fixed_model"):
+        control = {**control, "target_train_tokens": target_train_tokens_override}
 
     config = dict(require_mapping(defaults, "defaults"))
     config.update(merge_sections(defaults, experiment, "data"))
@@ -343,6 +391,7 @@ def build_run_config(
     env["TARGET_TRAIN_TOKENS"] = str(resolved_control.get("target_train_tokens", 0) or 0)
     env["WANDB_RUN_NAME"] = run_id
     env.setdefault("WANDB_GROUP", batch_id)
+    env.setdefault("WANDB_DIR", str(Path.cwd() / "wandb" / safe_name))
 
     nproc_per_node = int(launcher.get("nproc_per_node", 8))
     master_port_base = int(launcher.get("master_port_base", 29500))
@@ -454,7 +503,12 @@ def main() -> int:
     for index, experiment in enumerate(experiments):
         experiment_with_index = deepcopy(experiment)
         experiment_with_index["index"] = index
-        runs_to_execute.append(build_run_config(manifest, experiment_with_index, batch_id, output_root, manifest_path))
+        runs_to_execute.append(build_run_config(
+            manifest, experiment_with_index, batch_id, output_root, manifest_path,
+            nproc_override=args.nproc_per_node,
+            wallclock_seconds_override=args.wallclock_seconds,
+            target_train_tokens_override=args.target_train_tokens,
+        ))
 
     if args.dry_run:
         for run in runs_to_execute:
