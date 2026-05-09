@@ -17,6 +17,12 @@ Only V is modulated; Q and K are unchanged since QK-Norm absorbs any scalar scal
 $\lambda$ is placed in the Adam optimizer group (scalar group) along with other
 low-dimensional parameters.
 
+## Single-axis experiment (the 2 runs)
+
+| Experiment | `sa_lambda` init | Control |
+|---|---|---|
+| `self-attention-lambda-on-weights-fixed_time_10min` | 0.2 (per layer) | fixed_compute 600 s |
+| `self-attention-lambda-on-weights-fixed_tokens_10b` | 0.2 (per layer) | fixed_tokens 10 B |
 
 ### Origin
 
@@ -77,3 +83,13 @@ low-dimensional parameters.
 - `draft.py` — the original `2025-12-10_SALambdaOnWeight` code
 - `self-attention-lambda-on-weights.json` — 2-experiment manifest
 - `logs/` — experiment outputs (automatically generated)
+
+## How to run
+
+```bash
+# Dry-run the manifest
+python exp/run_experiments.py exp/self-attention-lambda-on-weights/self-attention-lambda-on-weights.json --dry-run
+
+# Launch both experiments
+python exp/run_experiments.py exp/self-attention-lambda-on-weights/self-attention-lambda-on-weights.json
+```
