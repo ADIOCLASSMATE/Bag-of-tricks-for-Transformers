@@ -28,14 +28,14 @@
 | DecoderReplayEnable | 数据/训练 | slowrun | Limited #7 ([7d8e580](https://github.com/qlabs-eng/slowrun/blob/7d8e580ab6a339079294562d000df3f7b1ce8c3c/train.py)) | 在训练后段重放 decoder span，让模型重复见到部分片段；不同 track 的具体 replay 细节略有差异。 |
 | ReplayScheduleTuning | 训练调度 | slowrun | Limited #8 ([64be473](https://github.com/qlabs-eng/slowrun/blob/64be4733075251c7da1d8b25529963520b16cdb8/train.py)) | 进一步调 replay 的开始时机、循环次数和 span，属于 replay 机制上的调度细化。 |
 | U-Net / skip family | 结构 | nanogpt-speedrun, slowrun | nanogpt `2025-11-18_RefineSkip`; slowrun Limited #5 ([e463653](https://github.com/qlabs-eng/slowrun/blob/e463653a2b07790e0694bfaa6bdd7e6ee57cef64/train.py)) | 在层间加入 encoder-decoder 式镜像 skip；nanogpt 版本进一步把 skip 结构从大 U 收紧到更精简的连接。 |
-| Value path family | 结构 | nanogpt-speedrun, parameter-golf, slowrun | nanogpt `2024-12-04_ValueEmbed`, `2025-04-22_Record8`, `2025-08-28_Medium_NewValemb`, `2025-10-04_GPT2MediumLayerReuse`, `2026-01-26-UntieValueEmbeddings`; parameter-golf `A10`; slowrun Limited #3 ([b261fba](https://github.com/qlabs-eng/slowrun/blob/b261fba252920582076cf8c77dedf9251fe7f7ed/train.py)) | 给网络增加额外的 value 注入路径：包括多层 VE、x0 投影、layer reuse，以及 tied/untied 的 value embedding 变体。 |
+| Value path family | 结构 | nanogpt-speedrun, parameter-golf, slowrun | nanogpt `2024-12-04_ValueEmbed`, `2025-04-22_Record8`, `2025-08-28_Medium_NewValemb`, `2025-10-04_GPT2MediumLayerReuse`, `2026-01-26-UntieValueEmbeddings`; parameter-golf `A10`; slowrun Limited #3 ([b261fba](https://github.com/qlabs-eng/slowrun/blob/b261fba252920582076cf8c77dedf9251fe7f7ed/train.py)) → [`exp/shared-ve`](exp/shared-ve/), [`exp/multi-ve`](exp/multi-ve/) | 给网络增加额外的 value 注入路径：包括多层 VE、x0 投影、layer reuse，以及 tied/untied 的 value embedding 变体。 |
 | UntieEmbed | 结构 | nanogpt-speedrun | `track_1_short / 2024-11-03_UntieEmbed` | 主因素是把 embedding 与 lm head 从 tied 改成 untied，并配合少量头部归一化/初始化调整。 |
 | BigramHash | 结构 | nanogpt-speedrun, parameter-golf | nanogpt `2026-01-19_BigramHashEmbedding`; parameter-golf `A05` | 额外引入 hash-based bigram embedding 分支，用哈希桶表示二元 token 组合后再并入主干。 |
 | Smear | 结构 | nanogpt-speedrun | `track_1_short / 2025-09-18_Smear` | 把 token embedding 向前 smear 一个位置，属于显式的相邻 token 混合。 |
 | SmearGate | 结构 | parameter-golf | `A04 SmearGate` | 用可学习 gate 混合相邻 token embedding；和简单 smear 相近，但机制是 gated blend。 |
 | SwiGLU | 结构 | slowrun | Limited #4 ([22d4a24](https://github.com/qlabs-eng/slowrun/blob/22d4a24ec53633c16d643779900ac3e9d10643a3/train.py)) | 把 ReLU^2 MLP 换成带门控的 SwiGLU MLP，用 gated product 重写 FFN 路径。 |
 | LeakyReLUSquared | 结构 | parameter-golf | `T13 LeakyReLUSquared` | 把 MLP 激活写成 `leaky_relu(x, 0.5).square()`，是对非线性形状的轻量替换。 |
-| MLPx3 | 结构 | parameter-golf | `A03 MLPx3` | 把 MLP 扩到 3 倍宽隐藏层，在相同骨架下提高 FFN 容量。 |
+| MLPx3 | 结构 | parameter-golf | `A03 MLPx3` → [`exp/mlp-x3`](exp/mlp-x3/) | 把 MLP 扩到 3 倍宽隐藏层，在相同骨架下提高 FFN 容量。 |
 | 10Layers / 11Layers | 结构 | parameter-golf | `A01 10Layers`, `A02 11Layers` | 直接增加 Transformer 层数，是最直接的深度扩展尝试。 |
 | LNScale | 结构/数值 | parameter-golf | `A09 LNScale` | 在 RMSNorm 输出后再乘上随层数缩放的系数 `1/sqrt(l+1)`，抑制深层幅值增长。 |
 | PartialRoPE | 结构 | parameter-golf | `A08 PartialRoPE` | 只对部分 head 维度施加 RoPE，把其余维度保留为非旋转通道。 |
