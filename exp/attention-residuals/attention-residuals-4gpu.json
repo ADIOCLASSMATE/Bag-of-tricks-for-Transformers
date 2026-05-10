@@ -37,7 +37,7 @@
   },
   "experiments": [
     {
-      "name": "attention-residuals-fixed_time_10min",
+      "name": "attention-residuals-fixed_time_20min",
       "trainer_path": "exp/attention-residuals/train_gpt.py",
       "control": {
         "mode": "fixed_compute",

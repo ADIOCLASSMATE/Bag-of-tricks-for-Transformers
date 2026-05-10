@@ -76,9 +76,9 @@ class Hyperparameters:
     tie_embeddings = bool(int(os.environ.get("TIE_EMBEDDINGS", "1")))
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
 
-    # trick: loop-share-mid — unique first + shared middle + unique remaining hyperparameters
-    num_unique_encoder = int(os.environ.get("NUM_UNIQUE_ENCODER", "1"))
-    num_loop_layers = int(os.environ.get("NUM_LOOP_LAYERS", "3"))
+    # trick: loop-share-mid — fraction of unique first + shared middle + unique remaining
+    num_unique_encoder = float(os.environ.get("NUM_UNIQUE_ENCODER", "0.1111"))
+    num_loop_layers = float(os.environ.get("NUM_LOOP_LAYERS", "0.3333"))
     num_loop_repeats = int(os.environ.get("NUM_LOOP_REPEATS", "3"))
 
     # Optimizer hyperparameters (Muon + Adam, from modded-nanogpt)
@@ -629,12 +629,17 @@ class GPT(nn.Module):
         mlp_mult: int,
         tie_embeddings: bool,
         rope_base: float,
-        num_unique_encoder: int,
-        num_loop_layers: int,
+        num_unique_encoder: float,
+        num_loop_layers: float,
         num_loop_repeats: int,
     ):
         super().__init__()
         self.tie_embeddings = tie_embeddings
+        # fractions → absolute counts
+        if 0 < num_unique_encoder <= 1:
+            num_unique_encoder = max(1, round(num_unique_encoder * num_layers))
+        if 0 < num_loop_layers <= 1:
+            num_loop_layers = max(1, round(num_loop_layers * num_layers))
         self.num_unique_encoder = num_unique_encoder
         self.num_loop_layers = num_loop_layers
         self.num_loop_repeats = num_loop_repeats
@@ -725,9 +730,7 @@ def main() -> None:
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     if world_size <= 0:
         raise ValueError(f"WORLD_SIZE must be positive, got {world_size}")
-    if 8 % world_size != 0:
-        raise ValueError(f"WORLD_SIZE={world_size} must divide 8 so grad_accum_steps stays integral")
-    grad_accum_steps = 8 // world_size
+    grad_accum_steps = 1
     grad_scale = 1.0 / grad_accum_steps
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")

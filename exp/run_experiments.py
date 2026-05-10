@@ -67,7 +67,7 @@ ENV_KEY_MAP = {
     # trick: sparse-attn-gate
     "attn_gate_dim": "ATTN_GATE_DIM",
     # trick: paired-head-attention
-    "paired_head_layers": "PAIRED_HEAD_LAYERS",
+    "paired_head_density": "PAIRED_HEAD_DENSITY",
     # trick: xsa
     "xsa_last_n": "XSA_LAST_N",
     # trick: yarn

@@ -1,0 +1,853 @@
+==============================================
+=== Small-Model Ablation Suite ===
+=== Model: 9L / 512d / 8 heads ===
+=== GPUs: 4 | Wallclock: 1200s ===
+=== Experiments: 31 ===
+=== MODE: DRY-RUN (validation only) ===
+=== Started at Sat May  9 09:36:44 UTC 2026 ===
+==============================================
+
+==============================================
+=== [baseline] ===
+=== Manifest: exp/baseline/baseline.json ===
+==============================================
+--- Dry-run validation ---
+[baseline-fixed_time_20min]
+  variant: baseline
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/baseline/train_gpt.py
+  run_id: experiment-20260509-093644-baseline-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/baseline/logs/experiment-20260509-093644/baseline-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/baseline/train_gpt.py
+[baseline-fixed_tokens_10b]
+  variant: baseline
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/baseline/train_gpt.py
+  run_id: experiment-20260509-093644-baseline-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/baseline/logs/experiment-20260509-093644/baseline-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/baseline/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [partial-key-offset] ===
+=== Manifest: exp/partial-key-offset/partial-key-offset.json ===
+==============================================
+--- Dry-run validation ---
+[partial-key-offset-fixed_time_20min]
+  variant: partial-key-offset
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/partial-key-offset/train_gpt.py
+  run_id: experiment-20260509-093644-partial-key-offset-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/partial-key-offset/logs/experiment-20260509-093644/partial-key-offset-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/partial-key-offset/train_gpt.py
+[partial-key-offset-fixed_tokens_10b]
+  variant: partial-key-offset
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/partial-key-offset/train_gpt.py
+  run_id: experiment-20260509-093644-partial-key-offset-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/partial-key-offset/logs/experiment-20260509-093644/partial-key-offset-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/partial-key-offset/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [sparse-attn-gate] ===
+=== Manifest: exp/sparse-attn-gate/sparse-attn-gate.json ===
+==============================================
+--- Dry-run validation ---
+[sparse-attn-gate-fixed_time_20min]
+  variant: sparse-attn-gate
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/sparse-attn-gate/train_gpt.py
+  run_id: experiment-20260509-093644-sparse-attn-gate-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/sparse-attn-gate/logs/experiment-20260509-093644/sparse-attn-gate-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/sparse-attn-gate/train_gpt.py
+[sparse-attn-gate-fixed_tokens_10b]
+  variant: sparse-attn-gate
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/sparse-attn-gate/train_gpt.py
+  run_id: experiment-20260509-093644-sparse-attn-gate-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/sparse-attn-gate/logs/experiment-20260509-093644/sparse-attn-gate-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/sparse-attn-gate/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [paired-head-attention] ===
+=== Manifest: exp/paired-head-attention/paired-head-attention.json ===
+==============================================
+--- Dry-run validation ---
+[paired-head-attention-fixed_time_20min]
+  variant: paired-head-attention
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/paired-head-attention/train_gpt.py
+  run_id: experiment-20260509-093644-paired-head-attention-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/paired-head-attention/logs/experiment-20260509-093644/paired-head-attention-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/paired-head-attention/train_gpt.py
+[paired-head-attention-fixed_tokens_10b]
+  variant: paired-head-attention
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/paired-head-attention/train_gpt.py
+  run_id: experiment-20260509-093644-paired-head-attention-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/paired-head-attention/logs/experiment-20260509-093644/paired-head-attention-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/paired-head-attention/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [xsa] ===
+=== Manifest: exp/xsa/xsa.json ===
+==============================================
+--- Dry-run validation ---
+[xsa-fixed_time_20min]
+  variant: xsa
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/xsa/train_gpt.py
+  run_id: experiment-20260509-093644-xsa-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/xsa/logs/experiment-20260509-093644/xsa-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/xsa/train_gpt.py
+[xsa-fixed_tokens_10b]
+  variant: xsa
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/xsa/train_gpt.py
+  run_id: experiment-20260509-093644-xsa-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/xsa/logs/experiment-20260509-093644/xsa-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/xsa/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [yarn] ===
+=== Manifest: exp/yarn/yarn.json ===
+==============================================
+--- Dry-run validation ---
+[yarn-fixed_time_20min]
+  variant: yarn
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/yarn/train_gpt.py
+  run_id: experiment-20260509-093644-yarn-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/yarn/logs/experiment-20260509-093644/yarn-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/yarn/train_gpt.py
+[yarn-fixed_tokens_10b]
+  variant: yarn
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/yarn/train_gpt.py
+  run_id: experiment-20260509-093644-yarn-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/yarn/logs/experiment-20260509-093644/yarn-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/yarn/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [factored-embedding] ===
+=== Manifest: exp/factored-embedding/factored-embedding.json ===
+==============================================
+--- Dry-run validation ---
+[factored-embedding-fixed_time_20min]
+  variant: factored-embedding
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/factored-embedding/train_gpt.py
+  run_id: experiment-20260509-093644-factored-embedding-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/factored-embedding/logs/experiment-20260509-093644/factored-embedding-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/factored-embedding/train_gpt.py
+[factored-embedding-fixed_tokens_10b]
+  variant: factored-embedding
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/factored-embedding/train_gpt.py
+  run_id: experiment-20260509-093644-factored-embedding-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/factored-embedding/logs/experiment-20260509-093644/factored-embedding-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/factored-embedding/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [untie-embed] ===
+=== Manifest: exp/untie-embed/untie-embed.json ===
+==============================================
+--- Dry-run validation ---
+[untie-embed-fixed_time_20min]
+  variant: untie-embed
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/untie-embed/train_gpt.py
+  run_id: experiment-20260509-093644-untie-embed-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/untie-embed/logs/experiment-20260509-093644/untie-embed-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/untie-embed/train_gpt.py
+[untie-embed-fixed_tokens_10b]
+  variant: untie-embed
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/untie-embed/train_gpt.py
+  run_id: experiment-20260509-093644-untie-embed-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/untie-embed/logs/experiment-20260509-093644/untie-embed-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/untie-embed/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [loop-share-mid] ===
+=== Manifest: exp/loop-share-mid/loop-share-mid.json ===
+==============================================
+--- Dry-run validation ---
+[loop-share-mid-fixed_time_20min]
+  variant: loop-share-mid
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/loop-share-mid/train_gpt.py
+  run_id: experiment-20260509-093645-loop-share-mid-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/loop-share-mid/logs/experiment-20260509-093645/loop-share-mid-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/loop-share-mid/train_gpt.py
+[loop-share-mid-fixed_tokens_10b]
+  variant: loop-share-mid
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/loop-share-mid/train_gpt.py
+  run_id: experiment-20260509-093645-loop-share-mid-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/loop-share-mid/logs/experiment-20260509-093645/loop-share-mid-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/loop-share-mid/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [loop-share-first] ===
+=== Manifest: exp/loop-share-first/loop-share-first.json ===
+==============================================
+--- Dry-run validation ---
+[loop-share-first-fixed_time_20min]
+  variant: loop-share-first
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/loop-share-first/train_gpt.py
+  run_id: experiment-20260509-093645-loop-share-first-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/loop-share-first/logs/experiment-20260509-093645/loop-share-first-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/loop-share-first/train_gpt.py
+[loop-share-first-fixed_tokens_10b]
+  variant: loop-share-first
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/loop-share-first/train_gpt.py
+  run_id: experiment-20260509-093645-loop-share-first-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/loop-share-first/logs/experiment-20260509-093645/loop-share-first-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/loop-share-first/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [loop-share-all] ===
+=== Manifest: exp/loop-share-all/loop-share-all.json ===
+==============================================
+--- Dry-run validation ---
+[loop-share-all-fixed_time_20min]
+  variant: loop-share-all
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/loop-share-all/train_gpt.py
+  run_id: experiment-20260509-093645-loop-share-all-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/loop-share-all/logs/experiment-20260509-093645/loop-share-all-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/loop-share-all/train_gpt.py
+[loop-share-all-fixed_tokens_10b]
+  variant: loop-share-all
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/loop-share-all/train_gpt.py
+  run_id: experiment-20260509-093645-loop-share-all-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/loop-share-all/logs/experiment-20260509-093645/loop-share-all-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/loop-share-all/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [kv-sharing-dwide-mlp] ===
+=== Manifest: exp/kv-sharing-dwide-mlp/kv-sharing-dwide-mlp.json ===
+==============================================
+--- Dry-run validation ---
+[kv-sharing-dwide-mlp-fixed_time_20min]
+  variant: kv-sharing-dwide-mlp
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/kv-sharing-dwide-mlp/train_gpt.py
+  run_id: experiment-20260509-093645-kv-sharing-dwide-mlp-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/kv-sharing-dwide-mlp/logs/experiment-20260509-093645/kv-sharing-dwide-mlp-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/kv-sharing-dwide-mlp/train_gpt.py
+[kv-sharing-dwide-mlp-fixed_tokens_10b]
+  variant: kv-sharing-dwide-mlp
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/kv-sharing-dwide-mlp/train_gpt.py
+  run_id: experiment-20260509-093645-kv-sharing-dwide-mlp-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/kv-sharing-dwide-mlp/logs/experiment-20260509-093645/kv-sharing-dwide-mlp-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/kv-sharing-dwide-mlp/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [resid-mix] ===
+=== Manifest: exp/resid-mix/resid-mix.json ===
+==============================================
+--- Dry-run validation ---
+[resid-mix-fixed_time_20min]
+  variant: resid-mix
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/resid-mix/train_gpt.py
+  run_id: experiment-20260509-093645-resid-mix-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/resid-mix/logs/experiment-20260509-093645/resid-mix-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/resid-mix/train_gpt.py
+[resid-mix-fixed_tokens_10b]
+  variant: resid-mix
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/resid-mix/train_gpt.py
+  run_id: experiment-20260509-093645-resid-mix-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/resid-mix/logs/experiment-20260509-093645/resid-mix-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/resid-mix/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [residual-lambda-init-11] ===
+=== Manifest: exp/residual-lambda-init-11/residual-lambda-init-11.json ===
+==============================================
+--- Dry-run validation ---
+[residual-lambda-init-11-fixed_time_20min]
+  variant: residual-lambda-init-11
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/residual-lambda-init-11/train_gpt.py
+  run_id: experiment-20260509-093645-residual-lambda-init-11-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/residual-lambda-init-11/logs/experiment-20260509-093645/residual-lambda-init-11-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/residual-lambda-init-11/train_gpt.py
+[residual-lambda-init-11-fixed_tokens_10b]
+  variant: residual-lambda-init-11
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/residual-lambda-init-11/train_gpt.py
+  run_id: experiment-20260509-093645-residual-lambda-init-11-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/residual-lambda-init-11/logs/experiment-20260509-093645/residual-lambda-init-11-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/residual-lambda-init-11/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [sandwich-norm] ===
+=== Manifest: exp/sandwich-norm/sandwich-norm.json ===
+==============================================
+--- Dry-run validation ---
+[sandwich-norm-fixed_time_20min]
+  variant: sandwich-norm
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/sandwich-norm/train_gpt.py
+  run_id: experiment-20260509-093645-sandwich-norm-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/sandwich-norm/logs/experiment-20260509-093645/sandwich-norm-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/sandwich-norm/train_gpt.py
+[sandwich-norm-fixed_tokens_10b]
+  variant: sandwich-norm
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/sandwich-norm/train_gpt.py
+  run_id: experiment-20260509-093645-sandwich-norm-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/sandwich-norm/logs/experiment-20260509-093645/sandwich-norm-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/sandwich-norm/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [scale-residual] ===
+=== Manifest: exp/scale-residual/scale-residual.json ===
+==============================================
+--- Dry-run validation ---
+[scale-residual-fixed_time_20min]
+  variant: scale-residual
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/scale-residual/train_gpt.py
+  run_id: experiment-20260509-093645-scale-residual-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/scale-residual/logs/experiment-20260509-093645/scale-residual-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/scale-residual/train_gpt.py
+[scale-residual-fixed_tokens_10b]
+  variant: scale-residual
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/scale-residual/train_gpt.py
+  run_id: experiment-20260509-093645-scale-residual-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/scale-residual/logs/experiment-20260509-093645/scale-residual-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/scale-residual/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [unet-skip] ===
+=== Manifest: exp/unet-skip/unet-skip.json ===
+==============================================
+--- Dry-run validation ---
+[unet-skip-fixed_time_20min]
+  variant: unet-skip
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/unet-skip/train_gpt.py
+  run_id: experiment-20260509-093645-unet-skip-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/unet-skip/logs/experiment-20260509-093645/unet-skip-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/unet-skip/train_gpt.py
+[unet-skip-fixed_tokens_10b]
+  variant: unet-skip
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/unet-skip/train_gpt.py
+  run_id: experiment-20260509-093645-unet-skip-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/unet-skip/logs/experiment-20260509-093645/unet-skip-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/unet-skip/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [attention-residuals (9 blocks)] ===
+=== Manifest: exp/attention-residuals/attention-residuals.json ===
+==============================================
+--- Dry-run validation ---
+[attention-residuals-fixed_time_20min]
+  variant: attention-residuals
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/attention-residuals/train_gpt.py
+  run_id: experiment-20260509-093645-attention-residuals-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/attention-residuals/logs/experiment-20260509-093645/attention-residuals-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/attention-residuals/train_gpt.py
+[attention-residuals-fixed_tokens_10b]
+  variant: attention-residuals
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/attention-residuals/train_gpt.py
+  run_id: experiment-20260509-093645-attention-residuals-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/attention-residuals/logs/experiment-20260509-093645/attention-residuals-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/attention-residuals/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [attention-residuals (3 blocks)] ===
+=== Manifest: exp/attention-residuals/attention-residuals-4gpu.json ===
+==============================================
+--- Dry-run validation ---
+[attention-residuals-fixed_time_20min]
+  variant: attention-residuals
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/attention-residuals/train_gpt.py
+  run_id: experiment-20260509-093645-attention-residuals-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/attention-residuals/logs/experiment-20260509-093645/attention-residuals-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/attention-residuals/train_gpt.py
+[attention-residuals-fixed_tokens_10b]
+  variant: attention-residuals
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/attention-residuals/train_gpt.py
+  run_id: experiment-20260509-093645-attention-residuals-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/attention-residuals/logs/experiment-20260509-093645/attention-residuals-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/attention-residuals/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [swiglu] ===
+=== Manifest: exp/swiglu/swiglu.json ===
+==============================================
+--- Dry-run validation ---
+[swiglu-fixed_time_20min]
+  variant: swiglu
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/swiglu/train_gpt.py
+  run_id: experiment-20260509-093645-swiglu-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/swiglu/logs/experiment-20260509-093645/swiglu-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/swiglu/train_gpt.py
+[swiglu-fixed_tokens_10b]
+  variant: swiglu
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/swiglu/train_gpt.py
+  run_id: experiment-20260509-093645-swiglu-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/swiglu/logs/experiment-20260509-093645/swiglu-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/swiglu/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [geglu] ===
+=== Manifest: exp/geglu/geglu.json ===
+==============================================
+--- Dry-run validation ---
+[geglu-fixed_time_20min]
+  variant: geglu
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/geglu/train_gpt.py
+  run_id: experiment-20260509-093645-geglu-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/geglu/logs/experiment-20260509-093645/geglu-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/geglu/train_gpt.py
+[geglu-fixed_tokens_10b]
+  variant: geglu
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/geglu/train_gpt.py
+  run_id: experiment-20260509-093645-geglu-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/geglu/logs/experiment-20260509-093645/geglu-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/geglu/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [leaky-relu-squared] ===
+=== Manifest: exp/leaky-relu-squared/leaky-relu-squared.json ===
+==============================================
+--- Dry-run validation ---
+[leaky-relu-squared-fixed_time_20min]
+  variant: leaky-relu-squared
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/leaky-relu-squared/train_gpt.py
+  run_id: experiment-20260509-093645-leaky-relu-squared-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/leaky-relu-squared/logs/experiment-20260509-093645/leaky-relu-squared-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/leaky-relu-squared/train_gpt.py
+[leaky-relu-squared-fixed_tokens_10b]
+  variant: leaky-relu-squared
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/leaky-relu-squared/train_gpt.py
+  run_id: experiment-20260509-093645-leaky-relu-squared-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/leaky-relu-squared/logs/experiment-20260509-093645/leaky-relu-squared-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/leaky-relu-squared/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [relu-sq] ===
+=== Manifest: exp/relu-sq/relu-sq.json ===
+==============================================
+--- Dry-run validation ---
+[relu-sq-fixed_time_20min]
+  variant: relu-sq
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/relu-sq/train_gpt.py
+  run_id: experiment-20260509-093645-relu-sq-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/relu-sq/logs/experiment-20260509-093645/relu-sq-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/relu-sq/train_gpt.py
+[relu-sq-fixed_tokens_10b]
+  variant: relu-sq
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/relu-sq/train_gpt.py
+  run_id: experiment-20260509-093645-relu-sq-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/relu-sq/logs/experiment-20260509-093645/relu-sq-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/relu-sq/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [logit-softcap] ===
+=== Manifest: exp/logit-softcap/logit-softcap.json ===
+==============================================
+--- Dry-run validation ---
+[logit-softcap-fixed_time_20min]
+  variant: logit-softcap
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/logit-softcap/train_gpt.py
+  run_id: experiment-20260509-093646-logit-softcap-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/logit-softcap/logs/experiment-20260509-093646/logit-softcap-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/logit-softcap/train_gpt.py
+[logit-softcap-fixed_tokens_10b]
+  variant: logit-softcap
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/logit-softcap/train_gpt.py
+  run_id: experiment-20260509-093646-logit-softcap-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/logit-softcap/logs/experiment-20260509-093646/logit-softcap-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/logit-softcap/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [q-gain] ===
+=== Manifest: exp/q-gain/q-gain.json ===
+==============================================
+--- Dry-run validation ---
+[q-gain-fixed_time_20min]
+  variant: q-gain
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/q-gain/train_gpt.py
+  run_id: experiment-20260509-093646-q-gain-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/q-gain/logs/experiment-20260509-093646/q-gain-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/q-gain/train_gpt.py
+[q-gain-fixed_tokens_10b]
+  variant: q-gain
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/q-gain/train_gpt.py
+  run_id: experiment-20260509-093646-q-gain-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/q-gain/logs/experiment-20260509-093646/q-gain-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/q-gain/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [attention-head-gating] ===
+=== Manifest: exp/attention-head-gating/attention-head-gating.json ===
+==============================================
+--- Dry-run validation ---
+[attention-head-gating-fixed_time_20min]
+  variant: attention-head-gating
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/attention-head-gating/train_gpt.py
+  run_id: experiment-20260509-093646-attention-head-gating-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/attention-head-gating/logs/experiment-20260509-093646/attention-head-gating-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/attention-head-gating/train_gpt.py
+[attention-head-gating-fixed_tokens_10b]
+  variant: attention-head-gating
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/attention-head-gating/train_gpt.py
+  run_id: experiment-20260509-093646-attention-head-gating-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/attention-head-gating/logs/experiment-20260509-093646/attention-head-gating-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/attention-head-gating/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [drop-attn] ===
+=== Manifest: exp/drop-attn/drop-attn.json ===
+==============================================
+--- Dry-run validation ---
+[drop-attn-fixed_time_20min]
+  variant: drop-attn
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/drop-attn/train_gpt.py
+  run_id: experiment-20260509-093646-drop-attn-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/drop-attn/logs/experiment-20260509-093646/drop-attn-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/drop-attn/train_gpt.py
+[drop-attn-fixed_tokens_10b]
+  variant: drop-attn
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/drop-attn/train_gpt.py
+  run_id: experiment-20260509-093646-drop-attn-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/drop-attn/logs/experiment-20260509-093646/drop-attn-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/drop-attn/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [per-layer-residual-input] ===
+=== Manifest: exp/per-layer-residual-input/per-layer-residual-input.json ===
+==============================================
+--- Dry-run validation ---
+[per-layer-residual-input-fixed_time_20min]
+  variant: per-layer-residual-input
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/per-layer-residual-input/train_gpt.py
+  run_id: experiment-20260509-093646-per-layer-residual-input-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/per-layer-residual-input/logs/experiment-20260509-093646/per-layer-residual-input-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/per-layer-residual-input/train_gpt.py
+[per-layer-residual-input-fixed_tokens_10b]
+  variant: per-layer-residual-input
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/per-layer-residual-input/train_gpt.py
+  run_id: experiment-20260509-093646-per-layer-residual-input-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/per-layer-residual-input/logs/experiment-20260509-093646/per-layer-residual-input-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/per-layer-residual-input/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [smear-gate] ===
+=== Manifest: exp/smear-gate/smear-gate.json ===
+==============================================
+--- Dry-run validation ---
+[smear-gate-fixed_time_20min]
+  variant: smear-gate
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/smear-gate/train_gpt.py
+  run_id: experiment-20260509-093646-smear-gate-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/smear-gate/logs/experiment-20260509-093646/smear-gate-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/smear-gate/train_gpt.py
+[smear-gate-fixed_tokens_10b]
+  variant: smear-gate
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/smear-gate/train_gpt.py
+  run_id: experiment-20260509-093646-smear-gate-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/smear-gate/logs/experiment-20260509-093646/smear-gate-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/smear-gate/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [engram-core] ===
+=== Manifest: exp/engram-core/engram-core.json ===
+==============================================
+--- Dry-run validation ---
+[engram-core-fixed_time_20min]
+  variant: engram-core
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/engram-core/train_gpt.py
+  run_id: experiment-20260509-093646-engram-core-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/engram-core/logs/experiment-20260509-093646/engram-core-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/engram-core/train_gpt.py
+[engram-core-fixed_tokens_10b]
+  variant: engram-core
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/engram-core/train_gpt.py
+  run_id: experiment-20260509-093646-engram-core-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/engram-core/logs/experiment-20260509-093646/engram-core-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/engram-core/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== [engram-compressed] ===
+=== Manifest: exp/engram-compressed/engram-compressed.json ===
+==============================================
+--- Dry-run validation ---
+[engram-compressed-fixed_time_20min]
+  variant: engram-compressed
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/engram-compressed/train_gpt.py
+  run_id: experiment-20260509-093646-engram-compressed-fixed_time_20min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/engram-compressed/logs/experiment-20260509-093646/engram-compressed-fixed_time_20min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/engram-compressed/train_gpt.py
+[engram-compressed-fixed_tokens_10b]
+  variant: engram-compressed
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/engram-compressed/train_gpt.py
+  run_id: experiment-20260509-093646-engram-compressed-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/engram-compressed/logs/experiment-20260509-093646/engram-compressed-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/exp/engram-compressed/train_gpt.py
+--- Dry-run passed ---
+
+==============================================
+=== Small-Model Ablation Complete ===
+=== Passed: 31/31 ===
+=== Failed: 0/31 ===
+=== Finished at Sat May  9 09:36:46 UTC 2026 ===
+=== Log: /inspire/hdd/global_user/wanjiaxin-253108030048/code/bag-of-tricks-transformers/scripts/logs/small_ablation_20260509_093644.log ===
+==============================================

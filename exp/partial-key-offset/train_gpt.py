@@ -93,7 +93,7 @@ class Hyperparameters:
 
     # trick: partial-key-offset — key offset on specified layers
     rope_half_truncate = bool(int(os.environ.get("ROPE_HALF_TRUNCATE", "1")))
-    key_offset_layers = os.environ.get("KEY_OFFSET_LAYERS", "3,8")
+    key_offset_layers = os.environ.get("KEY_OFFSET_LAYERS", "0.375,1.0")
 
     # Optional W&B logging
     enable_wandb = bool(int(os.environ.get("ENABLE_WANDB", "1")))
@@ -651,10 +651,10 @@ class GPT(nn.Module):
         super().__init__()
         self.tie_embeddings = tie_embeddings
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
-        # trick: partial-key-offset — determine which layers get key offset
+        # trick: partial-key-offset — fraction of total layers where key offset is applied
         offset_set = set()
         if key_offset_layers:
-            offset_set = {int(x.strip()) for x in key_offset_layers.split(",") if x.strip()}
+            offset_set = {round(float(x.strip()) * (num_layers - 1)) for x in key_offset_layers.split(",") if x.strip()}
         self.blocks = nn.ModuleList(
             [
                 Block(
@@ -708,9 +708,7 @@ def main() -> None:
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     if world_size <= 0:
         raise ValueError(f"WORLD_SIZE must be positive, got {world_size}")
-    if 8 % world_size != 0:
-        raise ValueError(f"WORLD_SIZE={world_size} must divide 8 so grad_accum_steps stays integral")
-    grad_accum_steps = 8 // world_size
+    grad_accum_steps = 1
     grad_scale = 1.0 / grad_accum_steps
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")

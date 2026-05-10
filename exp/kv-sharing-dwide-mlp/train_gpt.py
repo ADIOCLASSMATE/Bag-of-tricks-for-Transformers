@@ -88,7 +88,7 @@ class Hyperparameters:
     mlp_mult = int(os.environ.get("MLP_MULT", 2))
     tie_embeddings = bool(int(os.environ.get("TIE_EMBEDDINGS", "1")))
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
-    num_kv_shared_layers = int(os.environ.get("NUM_KV_SHARED_LAYERS", 2))
+    num_kv_shared_layers = float(os.environ.get("NUM_KV_SHARED_LAYERS", "0.2222"))
     use_double_wide_mlp = bool(int(os.environ.get("USE_DOUBLE_WIDE_MLP", "1")))
 
     # Optimizer hyperparameters (Muon + Adam, from modded-nanogpt)
@@ -659,12 +659,15 @@ class GPT(nn.Module):
         mlp_mult: int,
         tie_embeddings: bool,
         rope_base: float,
-        num_kv_shared_layers: int = 2,
+        num_kv_shared_layers: float = 0.2222,
         use_double_wide_mlp: bool = True,
     ):
         super().__init__()
         self.tie_embeddings = tie_embeddings
         self.num_layers = num_layers
+        # fraction → absolute count
+        if 0 < num_kv_shared_layers <= 1:
+            num_kv_shared_layers = max(1, round(num_kv_shared_layers * num_layers))
         self.num_kv_shared_layers = num_kv_shared_layers
         first_kv_shared_layer = num_layers - num_kv_shared_layers
         # Map each shared layer to its source layer
@@ -735,9 +738,7 @@ def main() -> None:
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     if world_size <= 0:
         raise ValueError(f"WORLD_SIZE must be positive, got {world_size}")
-    if 8 % world_size != 0:
-        raise ValueError(f"WORLD_SIZE={world_size} must divide 8 so grad_accum_steps stays integral")
-    grad_accum_steps = 8 // world_size
+    grad_accum_steps = 1
     grad_scale = 1.0 / grad_accum_steps
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")

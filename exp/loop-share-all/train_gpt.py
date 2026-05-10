@@ -77,7 +77,6 @@ class Hyperparameters:
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
 
     # trick: loop-share-all — looped transformer hyperparameters
-    num_loop_layers = int(os.environ.get("NUM_LOOP_LAYERS", "3"))
     num_loop_repeats = int(os.environ.get("NUM_LOOP_REPEATS", "3"))
 
     # Optimizer hyperparameters (Muon + Adam, from modded-nanogpt)
@@ -628,10 +627,10 @@ class GPT(nn.Module):
         mlp_mult: int,
         tie_embeddings: bool,
         rope_base: float,
-        num_loop_layers: int,
         num_loop_repeats: int,
     ):
         super().__init__()
+        num_loop_layers = num_layers // num_loop_repeats
         assert num_layers == num_loop_layers * num_loop_repeats, (
             f"num_layers ({num_layers}) must equal num_loop_layers * num_loop_repeats "
             f"({num_loop_layers} * {num_loop_repeats} = {num_loop_layers * num_loop_repeats})"
@@ -693,9 +692,7 @@ def main() -> None:
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     if world_size <= 0:
         raise ValueError(f"WORLD_SIZE must be positive, got {world_size}")
-    if 8 % world_size != 0:
-        raise ValueError(f"WORLD_SIZE={world_size} must divide 8 so grad_accum_steps stays integral")
-    grad_accum_steps = 8 // world_size
+    grad_accum_steps = 1
     grad_scale = 1.0 / grad_accum_steps
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
@@ -791,7 +788,6 @@ def main() -> None:
         mlp_mult=args.mlp_mult,
         tie_embeddings=args.tie_embeddings,
         rope_base=args.rope_base,
-        num_loop_layers=args.num_loop_layers,
         num_loop_repeats=args.num_loop_repeats,
     ).to(device).bfloat16()
     for module in base_model.modules():
@@ -865,7 +861,7 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
-    log0(f"trick:loop-share-all loop_layers:{args.num_loop_layers} loop_repeats:{args.num_loop_repeats} effective_depth:{args.num_loop_layers * args.num_loop_repeats}")
+    log0(f"trick:loop-share-all loop_layers:{base_model.num_loop_layers} loop_repeats:{args.num_loop_repeats} effective_depth:{base_model.num_loop_layers * args.num_loop_repeats}")
 
     if master_process and args.enable_wandb and args.wandb_mode != "disabled":
         try:

@@ -88,8 +88,8 @@ class Hyperparameters:
     adam_eps = float(os.environ.get("ADAM_EPS", 1e-8))
     grad_clip_norm = float(os.environ.get("GRAD_CLIP_NORM", 0.0))
 
-    # trick: paired-head-attention — layers to apply paired head (comma-separated indices)
-    paired_head_layers = os.environ.get("PAIRED_HEAD_LAYERS", "0,2,5,9")
+    # trick: paired-head-attention — density of layers with paired heads (0-1)
+    paired_head_density = float(os.environ.get("PAIRED_HEAD_DENSITY", "0.44"))
 
     # Optional W&B logging
     enable_wandb = bool(int(os.environ.get("ENABLE_WANDB", "1")))
@@ -636,14 +636,17 @@ class GPT(nn.Module):
         mlp_mult: int,
         tie_embeddings: bool,
         rope_base: float,
-        paired_head_layers: str = "",
+        paired_head_density: float = 0.44,
     ):
         super().__init__()
         self.tie_embeddings = tie_embeddings
-        # trick: paired-head-attention — parse layer indices
+        # trick: paired-head-attention — density-based: evenly space paired layers
+        count = max(1, round(paired_head_density * num_layers))
         paired_set = set()
-        if paired_head_layers:
-            paired_set = {int(s.strip()) for s in paired_head_layers.split(",") if s.strip()}
+        if count > 1:
+            paired_set = {round(i * (num_layers - 1) / (count - 1)) for i in range(count)}
+        else:
+            paired_set = {0}
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
         self.blocks = nn.ModuleList(
             [
@@ -697,9 +700,7 @@ def main() -> None:
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     if world_size <= 0:
         raise ValueError(f"WORLD_SIZE must be positive, got {world_size}")
-    if 8 % world_size != 0:
-        raise ValueError(f"WORLD_SIZE={world_size} must divide 8 so grad_accum_steps stays integral")
-    grad_accum_steps = 8 // world_size
+    grad_accum_steps = 1
     grad_scale = 1.0 / grad_accum_steps
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
@@ -795,7 +796,7 @@ def main() -> None:
         mlp_mult=args.mlp_mult,
         tie_embeddings=args.tie_embeddings,
         rope_base=args.rope_base,
-        paired_head_layers=args.paired_head_layers,
+        paired_head_density=args.paired_head_density,
     ).to(device).bfloat16()
     for module in base_model.modules():
         if isinstance(module, CastedLinear):

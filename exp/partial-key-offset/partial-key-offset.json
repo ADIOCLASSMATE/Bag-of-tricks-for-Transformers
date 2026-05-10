@@ -2,7 +2,7 @@
   "version": 1,
   "trainer_path": "exp/partial-key-offset/train_gpt.py",
   "launcher": {
-    "nproc_per_node": 8,
+    "nproc_per_node": 4,
     "master_port_base": 29500
   },
   "defaults": {
@@ -32,15 +32,15 @@
     "muon_momentum_warmup_steps": 800,
     "grad_clip_norm": 0.0,
     "rope_half_truncate": 1,
-    "key_offset_layers": "3,8"
+    "key_offset_layers": "0.375,1.0"
   },
   "experiments": [
     {
-      "name": "partial-key-offset-fixed_time_10min",
+      "name": "partial-key-offset-fixed_time_20min",
       "trainer_path": "exp/partial-key-offset/train_gpt.py",
       "control": {
         "mode": "fixed_compute",
-        "target_wallclock_seconds": 600,
+        "target_wallclock_seconds": 1200,
         "iterations_cap": 1000000
       }
     },

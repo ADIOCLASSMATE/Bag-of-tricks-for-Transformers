@@ -2,7 +2,7 @@
     "version": 1,
     "trainer_path": "exp/attention-head-gating/train_gpt.py",
     "launcher": {
-        "nproc_per_node": 8,
+        "nproc_per_node": 4,
         "master_port_base": 29500
     },
     "defaults": {
@@ -34,10 +34,10 @@
     },
     "experiments": [
         {
-            "name": "attention-head-gating-fixed_time_10min",
+            "name": "attention-head-gating-fixed_time_20min",
             "control": {
                 "mode": "fixed_compute",
-                "target_wallclock_seconds": 600,
+                "target_wallclock_seconds": 1200,
                 "iterations_cap": 1000000
             }
         },

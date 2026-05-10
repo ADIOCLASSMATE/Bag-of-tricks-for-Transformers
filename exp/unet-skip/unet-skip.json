@@ -2,7 +2,7 @@
   "version": 1,
   "trainer_path": "exp/unet-skip/train_gpt.py",
   "launcher": {
-    "nproc_per_node": 8,
+    "nproc_per_node": 4,
     "master_port_base": 29500
   },
   "defaults": {
@@ -34,11 +34,11 @@
   },
   "experiments": [
     {
-      "name": "unet-skip-fixed_time_10min",
+      "name": "unet-skip-fixed_time_20min",
       "trainer_path": "exp/unet-skip/train_gpt.py",
       "control": {
         "mode": "fixed_compute",
-        "target_wallclock_seconds": 600,
+        "target_wallclock_seconds": 1200,
         "iterations_cap": 1000000
       }
     },

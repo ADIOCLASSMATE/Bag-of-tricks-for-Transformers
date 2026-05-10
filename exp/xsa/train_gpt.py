@@ -88,8 +88,8 @@ class Hyperparameters:
     beta2 = float(os.environ.get("BETA2", 0.95))
     adam_eps = float(os.environ.get("ADAM_EPS", 1e-8))
     grad_clip_norm = float(os.environ.get("GRAD_CLIP_NORM", 0.0))
-    # trick: xsa — number of last layers to apply XSA (-1=all, 0=off)
-    xsa_last_n = int(os.environ.get("XSA_LAST_N", "0"))
+    # trick: xsa — fraction of last layers to apply XSA (-1=all, 0=off)
+    xsa_last_n = float(os.environ.get("XSA_LAST_N", "0"))
 
     # Optional W&B logging
     enable_wandb = bool(int(os.environ.get("ENABLE_WANDB", "1")))
@@ -654,13 +654,14 @@ class GPT(nn.Module):
                 for _ in range(num_layers)
             ]
         )
-        # trick: xsa — enable on last N layers (0=off, -1=all)
-        xsa_last_n = int(os.environ.get("XSA_LAST_N", "0"))
-        if xsa_last_n > 0:
-            for block in list(self.blocks)[-xsa_last_n:]:
-                block.attn.use_xsa = True
-        elif xsa_last_n == -1:
+        # trick: xsa — fraction of last layers (0=off, -1=all)
+        xsa_last_n = float(os.environ.get("XSA_LAST_N", "0"))
+        if xsa_last_n == -1:
             for block in self.blocks:
+                block.attn.use_xsa = True
+        elif 0 < xsa_last_n <= 1:
+            n = max(1, round(xsa_last_n * num_layers))
+            for block in list(self.blocks)[-n:]:
                 block.attn.use_xsa = True
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)
@@ -701,9 +702,7 @@ def main() -> None:
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     if world_size <= 0:
         raise ValueError(f"WORLD_SIZE must be positive, got {world_size}")
-    if 8 % world_size != 0:
-        raise ValueError(f"WORLD_SIZE={world_size} must divide 8 so grad_accum_steps stays integral")
-    grad_accum_steps = 8 // world_size
+    grad_accum_steps = 1
     grad_scale = 1.0 / grad_accum_steps
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")

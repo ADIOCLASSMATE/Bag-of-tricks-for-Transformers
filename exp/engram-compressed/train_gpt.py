@@ -82,7 +82,7 @@ class Hyperparameters:
 
     # Engram hyperparameters
     engram_enabled = bool(int(os.environ.get("ENGRAM_ENABLED", "1")))
-    engram_layer_ids = os.environ.get("ENGRAM_LAYER_IDS", "1,4,8")
+    engram_layer_ids = os.environ.get("ENGRAM_LAYER_IDS", "0.125,0.5,1.0")
     engram_max_ngram = int(os.environ.get("ENGRAM_MAX_NGRAM", 3))
     engram_heads_per_ngram = int(os.environ.get("ENGRAM_HEADS_PER_NGRAM", 4))
     engram_embed_per_ngram = int(
@@ -147,6 +147,11 @@ def parse_optional_int_csv(raw: str) -> tuple[int, ...]:
     if not raw:
         return ()
     return parse_int_csv(raw)
+
+
+def parse_layer_fractions(raw: str, num_layers: int) -> tuple[int, ...]:
+    values = [chunk.strip() for chunk in raw.split(",") if chunk.strip()]
+    return tuple(round(float(v) * (num_layers - 1)) for v in values)
 
 # -----------------------------
 # MUON OPTIMIZER
@@ -1062,9 +1067,7 @@ def main() -> None:
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     if world_size <= 0:
         raise ValueError(f"WORLD_SIZE must be positive, got {world_size}")
-    if 8 % world_size != 0:
-        raise ValueError(f"WORLD_SIZE={world_size} must divide 8 so grad_accum_steps stays integral")
-    grad_accum_steps = 8 // world_size
+    grad_accum_steps = 1
     grad_scale = 1.0 / grad_accum_steps
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
@@ -1168,7 +1171,7 @@ def main() -> None:
         tie_embeddings=args.tie_embeddings,
         rope_base=args.rope_base,
         engram_enabled=args.engram_enabled,
-        engram_layer_ids=parse_int_csv(args.engram_layer_ids),
+        engram_layer_ids=parse_layer_fractions(args.engram_layer_ids, args.num_layers),
         engram_max_ngram=args.engram_max_ngram,
         engram_heads_per_ngram=args.engram_heads_per_ngram,
         engram_embed_per_ngram=args.engram_embed_per_ngram,
@@ -1620,7 +1623,7 @@ def main() -> None:
                 "vocab_size": args.vocab_size,
                 "model_params": int(n_params),
                 "engram_enabled": bool(args.engram_enabled),
-                "engram_layer_ids": list(parse_int_csv(args.engram_layer_ids)),
+                "engram_layer_ids": list(parse_layer_fractions(args.engram_layer_ids, args.num_layers)),
                 "engram_params": int(engram_params),
                 "engram_use_tokenizer_compression": bool(args.engram_use_tokenizer_compression),
                 "engram_compressed_vocab_size": int(engram_compressed_vocab_size or args.vocab_size),
