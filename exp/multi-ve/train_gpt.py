@@ -1,25 +1,29 @@
 """
-trick: shared-ve — Per-layer V modulation with optional token embedding injection.
+trick: multi-ve — Two independent VE tables with per-layer V/VE modulation.
 
 Core modification:
+  - Two separate VE tables: ve_shallow (layers 0-2) and ve_deep (layers 6-8).
   - Each attention layer has two learnable scalars: lambdas[0] for V, lambdas[1] for VE.
-  - For layers 0-2 (shallow):  v = 5 * lambdas[0] * v + 5 * lambdas[1] * token_embed
-  - For layers 3-8 (deeper): v unchanged
+  - VE-active layers:  v = 5 * lambdas[0] * v + 5 * lambdas[1] * ve(input_ids)
+  - Other layers:      v unchanged
   - lambdas init = [0.2, 0.0] → effective init [1.0, 0.0], identical to baseline at step 0.
   - The 5x multiplier gives ~5× effective LR on both lambdas via gradient scaling.
-  - VE reuses the existing tok_emb weight (zero extra parameters).
+
+Layer coverage:
+  - Layer 0-2:  ve_shallow (local token identity for shallow layers)
+  - Layer 3-5:  no VE (unimpeded abstraction)
+  - Layer 6-8:  ve_deep (semantic token identity for deep layers)
 
 Design hypothesis:
   - lambdas[0] allows per-layer V magnitude tuning (only in VE-active layers).
-  - lambdas[1] controls how much raw token identity is injected into V.
-  - Shallow layers benefit from token identity; deeper layers work with abstractions.
+  - lambdas[1] controls VE injection strength per layer.
+  - Independent VE tables let shallow and deep layers learn different token representations
+    (vs shared-ve which forces both to reuse the main tok_emb).
 
-Differences from the original modded-nanogpt ValueEmbed (2024-12-04_ValueEmbed):
-  - Original: separate vte table (vocab × dim×12), chunked per layer.
-  - This: reuses tok_emb (0 params), per-layer [V_coeff, VE_coeff] pair.
-  - Original: convex combination v = (1-λ)·v + λ·ve with λ init 0.5.
-  - This: additive with independent V and VE coefficients.
-  - Original: all 12 layers; This: first 3 layers only.
+Differences from shared-ve:
+  - shared-ve: reuses tok_emb weight (0 extra params), only early layers.
+  - multi-ve: two independent VE tables (+2*vocab*dim params, +1,048,576), covers both shallow and deep.
+  - Both: +18 lambdas (2 per attention layer × 9 layers).
 """
 
 from __future__ import annotations
@@ -568,7 +572,7 @@ class CausalSelfAttention(nn.Module):
 
         self.lambdas = nn.Parameter(torch.tensor([0.2, 0.0]))
 
-    def forward(self, x: Tensor, shared_token_embed: Tensor | None = None) -> Tensor:
+    def forward(self, x: Tensor, ve: Tensor | None = None) -> Tensor:
         bsz, seqlen, dim = x.shape
         q = self.c_q(x).reshape(bsz, seqlen, self.num_heads, self.head_dim).transpose(1, 2)
         k = self.c_k(x).reshape(bsz, seqlen, self.num_kv_heads, self.head_dim).transpose(1, 2)
@@ -580,8 +584,8 @@ class CausalSelfAttention(nn.Module):
         q = apply_rotary_emb(q, cos, sin)
         k = apply_rotary_emb(k, cos, sin)
         # Add shared token_embed to the value
-        if shared_token_embed is not None:
-            v = 5 * self.lambdas[0] * v + 5 * self.lambdas[1] * shared_token_embed.view_as(v)
+        if ve is not None:
+            v = 5 * self.lambdas[0] * v + 5 * self.lambdas[1] * ve.view_as(v)
         y = F.scaled_dot_product_attention(
             q,
             k,
@@ -620,8 +624,8 @@ class Block(nn.Module):
         self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base)
         self.mlp = MLP(dim, mlp_mult)
 
-    def forward(self, x: Tensor, shared_token_embed: Tensor | None = None) -> Tensor:
-        x = x + self.attn(self.attn_norm(x), shared_token_embed)
+    def forward(self, x: Tensor, ve: Tensor | None = None) -> Tensor:
+        x = x + self.attn(self.attn_norm(x), ve)
         x = x + self.mlp(self.mlp_norm(x))
         return x
 
@@ -641,6 +645,9 @@ class GPT(nn.Module):
         super().__init__()
         self.tie_embeddings = tie_embeddings
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
+        # Two independent VE tables: shallow (layers 0-2) and deep (layers 6-8)
+        self.ve_shallow = nn.Embedding(vocab_size, model_dim)
+        self.ve_deep = nn.Embedding(vocab_size, model_dim)
         self.blocks = nn.ModuleList(
             [
                 Block(
@@ -658,10 +665,13 @@ class GPT(nn.Module):
 
     def forward(self, input_ids: Tensor, target_ids: Tensor) -> Tensor:
         x = self.tok_emb(input_ids)
-        shared_token_embed = x
+        ve_shallow = self.ve_shallow(input_ids)
+        ve_deep = self.ve_deep(input_ids)
         for idx, block in enumerate(self.blocks):
-            if idx < 3: # Only add shared_token_embed in the first three shallow layers
-                x = block(x, shared_token_embed)
+            if idx < 3:
+                x = block(x, ve_shallow)
+            elif idx >= 6:
+                x = block(x, ve_deep)
             else:
                 x = block(x)
         x = self.final_norm(x).reshape(-1, x.size(-1))
@@ -820,7 +830,7 @@ def main() -> None:
     ]
     token_lr = args.tied_embed_lr if args.tie_embeddings else args.embed_lr
     optimizer_tok = torch.optim.Adam(
-        [{"params": [base_model.tok_emb.weight], "lr": token_lr, "base_lr": token_lr}],
+        [{"params": [base_model.tok_emb.weight, base_model.ve_shallow.weight, base_model.ve_deep.weight], "lr": token_lr, "base_lr": token_lr}],
         betas=(args.beta1, args.beta2),
         eps=args.adam_eps,
         fused=True,
