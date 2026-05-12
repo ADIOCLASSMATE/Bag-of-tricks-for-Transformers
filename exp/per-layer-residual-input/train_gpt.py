@@ -138,7 +138,7 @@ CONTROL_TENSOR_NAME_PATTERNS = tuple(
     pattern
     for pattern in os.environ.get(
         "CONTROL_TENSOR_NAME_PATTERNS",
-        "per_layer_gate,per_layer_gates,per_layer_projection,per_layer_projections,per_layer_norm",
+        "",
     ).split(",")
     if pattern
 )
@@ -857,8 +857,8 @@ def main() -> None:
         for name, p in block_named_params
         if p.ndim < 2 or any(pattern in name for pattern in CONTROL_TENSOR_NAME_PATTERNS)
     ]
-    # trick: per-layer-residual-input — add GPT-level per_layer_model_projection to optimizer
-    scalar_params.append(base_model.per_layer_model_projection.weight)
+    # trick: per-layer-residual-input — route GPT-level projection like other 2D matrices.
+    matrix_params.append(base_model.per_layer_model_projection.weight)
     token_lr = args.tied_embed_lr if args.tie_embeddings else args.embed_lr
     optimizer_tok = torch.optim.AdamW(
         [{"params": [base_model.tok_emb.weight, base_model.embed_tokens_per_layer.weight], "lr": token_lr, "base_lr": token_lr, "weight_decay": args.weight_decay if args.tie_embeddings else 0.0}],
