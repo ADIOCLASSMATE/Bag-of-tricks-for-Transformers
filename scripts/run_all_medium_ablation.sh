@@ -41,7 +41,7 @@ EXPERIMENTS=(
     "scale-residual|exp/scale-residual/scale-residual-medium.json"
     "unet-skip|exp/unet-skip/unet-skip-medium.json"
     "attention-residuals (9 blocks)|exp/attention-residuals/attention-residuals-medium.json"
-    "attention-residuals (3 blocks)|exp/attention-residuals/attention-residuals-4gpu-medium.json"
+    "attention-residuals (3 blocks)|exp/attention-residuals/attention-residuals-3blocks-medium.json"
     "swiglu|exp/swiglu/swiglu-medium.json"
     "geglu|exp/geglu/geglu-medium.json"
     "leaky-relu-squared|exp/leaky-relu-squared/leaky-relu-squared-medium.json"

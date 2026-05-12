@@ -40,7 +40,7 @@ EXPERIMENTS=(
     "scale-residual|exp/scale-residual/scale-residual.json"
     "unet-skip|exp/unet-skip/unet-skip.json"
     "attention-residuals (9 blocks)|exp/attention-residuals/attention-residuals.json"
-    "attention-residuals (3 blocks)|exp/attention-residuals/attention-residuals-4gpu.json"
+    "attention-residuals (3 blocks)|exp/attention-residuals/attention-residuals-3blocks.json"
     "swiglu|exp/swiglu/swiglu.json"
     "geglu|exp/geglu/geglu.json"
     "leaky-relu-squared|exp/leaky-relu-squared/leaky-relu-squared.json"

@@ -13,7 +13,7 @@
     "train_seq_len": 1024,
     "warmup_steps": 50,
     "warmdown_iters": 800,
-    "enable_wandb": 1,
+    "enable_wandb": 0,
     "wandb_mode": "offline",
     "wandb_project": "bag-of-tricks-for-transformers",
     "num_layers": 18,

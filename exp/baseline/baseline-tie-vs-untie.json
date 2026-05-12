@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "trainer_path": "exp/baseline/train_gpt.py",
+  "launcher": {
+    "nproc_per_node": 4,
+    "master_port_base": 29500
+  },
+  "defaults": {
+    "data_path": "./data/datasets/fineweb10B_sp1024",
+    "tokenizer_path": "./data/tokenizers/fineweb_1024_bpe.model",
+    "vocab_size": 1024,
+    "train_batch_tokens": 524288,
+    "train_seq_len": 1024,
+    "warmup_steps": 50,
+    "enable_wandb": 1,
+    "wandb_mode": "online",
+    "wandb_project": "bag-of-tricks-for-transformers",
+    "wandb_entity": "Bag-of-Tricks",
+    "wandb_group": "tie-vs-untie",
+    "tied_embed_lr": 0.05,
+    "embed_lr": 0.6,
+    "head_lr": 0.008,
+    "matrix_lr": 0.04,
+    "scalar_lr": 0.04,
+    "muon_momentum": 0.95,
+    "muon_backend_steps": 5,
+    "muon_momentum_warmup_start": 0.85,
+    "muon_momentum_warmup_steps": 800,
+    "grad_clip_norm": 0.0,
+    "weight_decay": 0.1
+  },
+  "experiments": [
+    {
+      "name": "tied-small-10B",
+      "overrides": {
+        "num_layers": 9,
+        "model_dim": 512,
+        "num_heads": 8,
+        "num_kv_heads": 4,
+        "mlp_mult": 2,
+        "warmdown_iters": 1500,
+        "tie_embeddings": 1
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 10000000000
+      }
+    },
+    {
+      "name": "untied-small-10B",
+      "overrides": {
+        "num_layers": 9,
+        "model_dim": 512,
+        "num_heads": 8,
+        "num_kv_heads": 4,
+        "mlp_mult": 2,
+        "warmdown_iters": 1500,
+        "tie_embeddings": 0
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 10000000000
+      }
+    },
+    {
+      "name": "tied-medium-10B",
+      "overrides": {
+        "num_layers": 18,
+        "model_dim": 1024,
+        "num_heads": 16,
+        "num_kv_heads": 8,
+        "mlp_mult": 2,
+        "warmdown_iters": 800,
+        "tie_embeddings": 1
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 10000000000
+      }
+    },
+    {
+      "name": "untied-medium-10B",
+      "overrides": {
+        "num_layers": 18,
+        "model_dim": 1024,
+        "num_heads": 16,
+        "num_kv_heads": 8,
+        "mlp_mult": 2,
+        "warmdown_iters": 800,
+        "tie_embeddings": 0
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 10000000000
+      }
+    }
+  ]
+}

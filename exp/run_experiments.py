@@ -25,6 +25,7 @@ ENV_KEY_MAP = {
     "warmup_steps": "WARMUP_STEPS",
     "train_batch_tokens": "TRAIN_BATCH_TOKENS",
     "train_seq_len": "TRAIN_SEQ_LEN",
+    "grad_accum_steps": "GRAD_ACCUM_STEPS",
     "max_wallclock_seconds": "MAX_WALLCLOCK_SECONDS",
     "qk_gain_init": "QK_GAIN_INIT",
     "num_layers": "NUM_LAYERS",
@@ -60,6 +61,7 @@ ENV_KEY_MAP = {
     "beta1": "BETA1",
     "beta2": "BETA2",
     "adam_eps": "ADAM_EPS",
+    "weight_decay": "WEIGHT_DECAY",
     "grad_clip_norm": "GRAD_CLIP_NORM",
     # trick: partial-key-offset
     "rope_half_truncate": "ROPE_HALF_TRUNCATE",
@@ -104,7 +106,7 @@ ENV_KEY_MAP = {
 
 MODEL_KEYS = ("num_layers", "model_dim", "num_heads", "num_kv_heads", "mlp_mult", "vocab_size")
 CONTROL_MODES = {"fixed_tokens", "fixed_model", "fixed_compute"}
-DEFAULT_TRAINER_PATH = "exp/baseline-sp1024/train_gpt.py"
+DEFAULT_TRAINER_PATH = "exp/baseline/train_gpt.py"
 
 
 def parse_args() -> argparse.Namespace:
