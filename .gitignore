@@ -8,10 +8,10 @@
 .pipeline/
 
 # Reference files and data
-nanogpt-speedrun/
-parameter-golf/
-slowrun/
-modded-nanogpt/
+nanogpt-speedrun
+parameter-golf
+slowrun
+modded-nanogpt
 
 # Data
 data/tokenizers
