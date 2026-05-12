@@ -28,3 +28,5 @@ final_model*.ptz
 .pipeline/
 exp/**/final_model*.pt
 core.*
+
+wandb/
