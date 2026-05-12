@@ -1,32 +1,43 @@
-.claude
-.codex
-.sii
-nanogpt-speedrun
-parameter-golf
-slowrun
+# Tools cache
+.claude/
+.codex/
+.sii/
+.inspire/
+.idea/
+.vscode/
+.pipeline/
+
+# Reference files and data
+nanogpt-speedrun/
+parameter-golf/
+slowrun/
+modded-nanogpt/
+
+# Data
 data/tokenizers
+data/datasets
+data/manifest.json
+data/docs_selected.jsonl
+
+# Cache
+.cache/
 __pycache__/
 **/__pycache__/
 *.py[cod]
 .DS_Store
-modded-nanogpt/
-modded-nanogpt
-data/datasets
-data/manifest.json
-data/docs_selected.jsonl
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
-.idea/
-.vscode/
-.venv
-.venv-fa3/
+
+# Virtual environments
+venv/
+venv-fa3/
+.venv/
+
+# Logs and checkpoints
 final_model*.pt
 final_model*.ptz
-.cache
-.inspire/
-.pipeline/
+
 exp/**/final_model*.pt
 core.*
-
 wandb/
