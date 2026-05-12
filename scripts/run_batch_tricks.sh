@@ -12,6 +12,9 @@ LOG_FILE="$LOG_DIR/test_all_${TIMESTAMP}.log"
 
 exec &> >(tee -a "$LOG_FILE")
 
+##
+#############################
+## 给定exp id
 TRICKS=(
     "partial-key-offset"
     "sparse-attn-gate"
@@ -21,10 +24,6 @@ TRICKS=(
     "multi-token-prediction"
     "factored-embedding"
 )
-
-# TRICKS=(
-#     "partial-key-offset"
-# )
 
 cd "$PROJECT_DIR"
 
@@ -47,38 +46,45 @@ for trick in "${TRICKS[@]}"; do
     echo "=== Testing: ${trick} ==="
     echo "========================================"
 
-    MANIFEST="exp/${trick}/${trick}.json"
+    ##
+    ####################
+    ## 给定每个实验的配置文件--json
+    MANIFESTS=("exp/${trick}/${trick}.json" "exp/${trick}/${trick}-medium.json")
 
-    if [ ! -f "$MANIFEST" ]; then
-        echo "ERROR: Manifest not found: ${MANIFEST}"
-        FAILED=$((FAILED + 1))
-        FAILED_LIST+=("$trick")
-        continue
-    fi
+    for MANIFEST in "${MANIFESTS[@]}"; do
+        echo "--- Manifest: ${MANIFEST} ---"
 
-    # Step 1: Dry-run validation
-    echo "--- Dry-run validation ---"
-    if uv run python exp/run_experiments.py "$MANIFEST" --dry-run --nproc-per-node "$NPROC" --wallclock-seconds "$WALLCLOCK_SECONDS"; then
-        echo "--- Dry-run passed ---"
-    else
-        echo "--- Dry-run FAILED ---"
-        FAILED=$((FAILED + 1))
-        FAILED_LIST+=("$trick")
-        continue
-    fi
+        if [ ! -f "$MANIFEST" ]; then
+            echo "ERROR: Manifest not found: ${MANIFEST}"
+            FAILED=$((FAILED + 1))
+            FAILED_LIST+=("$trick")
+            continue
+        fi
 
-    # Step 2: Launch training
-    echo "--- Launching training ---"
-    if uv run python exp/run_experiments.py "$MANIFEST" --nproc-per-node "$NPROC" --wallclock-seconds "$WALLCLOCK_SECONDS"; then
-        echo "--- Training PASSED ---"
-        PASSED=$((PASSED + 1))
-    else
-        echo "--- Training FAILED ---"
-        FAILED=$((FAILED + 1))
-        FAILED_LIST+=("$trick")
-    fi
+        # Step 1: Dry-run validation
+        echo "--- Dry-run validation ---"
+        if uv run python exp/run_experiments.py "$MANIFEST" --dry-run --nproc-per-node "$NPROC" --wallclock-seconds "$WALLCLOCK_SECONDS"; then
+            echo "--- Dry-run passed ---"
+        else
+            echo "--- Dry-run FAILED ---"
+            FAILED=$((FAILED + 1))
+            FAILED_LIST+=("$trick")
+            continue
+        fi
 
-    echo ""
+        # Step 2: Launch training
+        echo "--- Launching training ---"
+        if uv run python exp/run_experiments.py "$MANIFEST" --nproc-per-node "$NPROC" --wallclock-seconds "$WALLCLOCK_SECONDS"; then
+            echo "--- Training PASSED ---"
+            PASSED=$((PASSED + 1))
+        else
+            echo "--- Training FAILED ---"
+            FAILED=$((FAILED + 1))
+            FAILED_LIST+=("$trick")
+        fi
+
+        echo ""
+    done
 done
 
 echo "========================================"
