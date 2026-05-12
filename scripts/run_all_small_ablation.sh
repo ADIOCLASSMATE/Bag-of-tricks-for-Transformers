@@ -9,6 +9,9 @@
 
 set -e
 
+# wandb grouping — all small-model runs in one group, tag for filtering
+export WANDB_ENTITY="${WANDB_ENTITY:-Bag-of-Tricks}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOG_DIR="$SCRIPT_DIR/logs"
@@ -22,7 +25,8 @@ exec &> >(tee -a "$LOG_FILE")
 # Each entry is "display_name|manifest_path"
 # attention-residuals has two variants — both must run.
 EXPERIMENTS=(
-    "baseline|exp/baseline/baseline.json"
+    "baseline-small|exp/baseline/baseline.json"
+    "baseline-medium|exp/baseline/baseline-medium.json"
     "partial-key-offset|exp/partial-key-offset/partial-key-offset.json"
     "sparse-attn-gate|exp/sparse-attn-gate/sparse-attn-gate.json"
     "paired-head-attention|exp/paired-head-attention/paired-head-attention.json"
@@ -60,10 +64,6 @@ cd "$PROJECT_DIR"
 NPROC=${NPROC:-4}
 WALLCLOCK_SECONDS=${WALLCLOCK_SECONDS:-1200}
 DRY_RUN=""
-
-# wandb grouping — all small-model runs in one group, tag for filtering
-export WANDB_GROUP="${WANDB_GROUP:-small-ablation}"
-export WANDB_TAGS="${WANDB_TAGS:-small-model,9L-512d}"
 
 for arg in "$@"; do
     case "$arg" in

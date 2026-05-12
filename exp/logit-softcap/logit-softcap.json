@@ -31,7 +31,9 @@
     "muon_momentum_warmup_start": 0.85,
     "muon_momentum_warmup_steps": 800,
     "grad_clip_norm": 0.0,
-    "logit_softcap": 30.0
+    "logit_softcap": 30.0,
+    "wandb_entity": "Bag-of-Tricks",
+    "wandb_group": "small-ablation"
   },
   "experiments": [
     {

@@ -32,7 +32,9 @@
     "muon_momentum_warmup_steps": 800,
     "grad_clip_norm": 0.0,
     "num_kv_shared_layers": 0.2222,
-    "use_double_wide_mlp": 1
+    "use_double_wide_mlp": 1,
+    "wandb_entity": "Bag-of-Tricks",
+    "wandb_group": "medium-ablation"
   },
   "experiments": [
     {

@@ -21,7 +21,9 @@
     "num_heads": 16,
     "num_kv_heads": 8,
     "mlp_mult": 2,
-    "muon_momentum_warmup_steps": 800
+    "muon_momentum_warmup_steps": 800,
+    "wandb_entity": "Bag-of-Tricks",
+    "wandb_group": "medium-ablation"
   },
   "experiments": [
     {

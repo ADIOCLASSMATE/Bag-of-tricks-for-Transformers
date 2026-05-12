@@ -33,7 +33,9 @@
     "grad_clip_norm": 0.0,
     "sliding_window_pattern": 3,
     "global_rope_theta": 1000000.0,
-    "partial_rotary_factor": 0.25
+    "partial_rotary_factor": 0.25,
+    "wandb_entity": "Bag-of-Tricks",
+    "wandb_group": "small-ablation"
   },
   "experiments": [
     {

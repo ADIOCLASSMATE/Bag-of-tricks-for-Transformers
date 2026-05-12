@@ -71,6 +71,7 @@ done
 # wandb grouping — all medium-model runs in one group, tag for filtering
 export WANDB_GROUP="${WANDB_GROUP:-medium-ablation}"
 export WANDB_TAGS="${WANDB_TAGS:-medium-model,18L-1024d}"
+export WANDB_ENTITY="${WANDB_ENTITY:-Bag-of-Tricks}"
 
 echo "=============================================="
 echo "=== Medium-Model Ablation Suite ==="

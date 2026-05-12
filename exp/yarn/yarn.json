@@ -32,7 +32,9 @@
     "muon_momentum_warmup_steps": 800,
     "grad_clip_norm": 0.0,
     "use_yarn": 1,
-    "yarn_max_len": 4096
+    "yarn_max_len": 4096,
+    "wandb_entity": "Bag-of-Tricks",
+    "wandb_group": "small-ablation"
   },
   "experiments": [
     {

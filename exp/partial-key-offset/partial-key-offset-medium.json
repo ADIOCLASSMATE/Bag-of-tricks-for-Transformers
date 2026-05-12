@@ -32,7 +32,9 @@
     "muon_momentum_warmup_steps": 800,
     "grad_clip_norm": 0.0,
     "rope_half_truncate": 1,
-    "key_offset_layers": "0.375,1.0"
+    "key_offset_layers": "0.375,1.0",
+    "wandb_entity": "Bag-of-Tricks",
+    "wandb_group": "medium-ablation"
   },
   "experiments": [
     {

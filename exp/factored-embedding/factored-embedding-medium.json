@@ -30,7 +30,9 @@
     "muon_momentum_warmup_start": 0.85,
     "muon_momentum_warmup_steps": 800,
     "grad_clip_norm": 0.0,
-    "embed_dim": 256
+    "embed_dim": 256,
+    "wandb_entity": "Bag-of-Tricks",
+    "wandb_group": "medium-ablation"
   },
   "experiments": [
     {

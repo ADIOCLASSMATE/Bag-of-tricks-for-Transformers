@@ -33,7 +33,9 @@
     "grad_clip_norm": 0.0,
     "attn_res_enabled": 1,
     "attn_res_num_blocks": 9,
-    "attn_res_recency_bias_init": 10.0
+    "attn_res_recency_bias_init": 10.0,
+    "wandb_entity": "Bag-of-Tricks",
+    "wandb_group": "medium-ablation"
   },
   "experiments": [
     {

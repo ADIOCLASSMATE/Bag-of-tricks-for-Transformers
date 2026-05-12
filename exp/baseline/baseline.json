@@ -16,6 +16,8 @@
     "enable_wandb": 1,
     "wandb_mode": "offline",
     "wandb_project": "bag-of-tricks-for-transformers",
+    "wandb_entity": "Bag-of-Tricks",
+    "wandb_group": "small-ablation",
     "num_layers": 9,
     "model_dim": 512,
     "num_heads": 8,
