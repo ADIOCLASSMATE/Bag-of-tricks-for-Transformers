@@ -144,7 +144,7 @@ CONTROL_TENSOR_NAME_PATTERNS = tuple(
     pattern
     for pattern in os.environ.get(
         "CONTROL_TENSOR_NAME_PATTERNS",
-        "attn_res_bias,mlp_res_bias,attn_res_proj,mlp_res_proj",
+        "",
     ).split(",")
     if pattern
 )
@@ -681,6 +681,7 @@ class Block(nn.Module):
         self.layers_per_block = layers_per_block
         self.attn_res_enabled = attn_res_enabled
         self.gate_type = attnres_gate_type
+        self.attnres_mode = attnres_mode
         self.attnres_recency_bias_init = attnres_recency_bias_init
         self.attn_res_proj = CastedLinear(dim, 1, bias=False)
         self.attn_res_norm = RMSNorm()
@@ -726,22 +727,45 @@ class Block(nn.Module):
     def forward(self, blocks: list[Tensor] | None = None, partial_block: Tensor | None = None) -> tuple:
         # trick: attention-residuals — branch on whether attention residuals are enabled
         if self.attn_res_enabled and blocks is not None:
-            # Attention residuals path
-            # Attend over block history before attention sublayer
-            h_attn = block_attn_res(blocks, partial_block, self.attn_res_proj, self.attn_res_norm, self.attn_res_bias)
-            h = self._apply_gate(partial_block, h_attn, sublayer="attn")
-            attn_out = self.attn(self.attn_norm(h))
-            partial_block = partial_block + attn_out
-            blocks = blocks + [partial_block]
+            if self.attnres_mode == "block":
+                # ---- Block mode ----
+                # Attend over block history before attention sublayer
+                h_attn = block_attn_res(blocks, partial_block, self.attn_res_proj, self.attn_res_norm, self.attn_res_bias)
+                h = self._apply_gate(partial_block, h_attn, sublayer="attn")
 
-            # Attend over block history before MLP sublayer
-            h_mlp = block_attn_res(blocks, partial_block, self.mlp_res_proj, self.mlp_res_norm, self.mlp_res_bias)
-            h = self._apply_gate(partial_block, h_mlp, sublayer="mlp")
-            mlp_out = self.mlp(self.mlp_norm(h))
-            partial_block = partial_block + mlp_out
-            blocks = blocks + [partial_block]
+                # New block boundary: store old partial, reset
+                if self.is_new_block_start:
+                    blocks = blocks + [partial_block]
+                    partial_block = torch.zeros_like(partial_block)
 
-            return blocks, partial_block
+                attn_out = self.attn(self.attn_norm(h))
+                partial_block = partial_block + attn_out
+
+                # Attend over block history before MLP sublayer
+                h_mlp = block_attn_res(blocks, partial_block, self.mlp_res_proj, self.mlp_res_norm, self.mlp_res_bias)
+                h = self._apply_gate(partial_block, h_mlp, sublayer="mlp")
+                mlp_out = self.mlp(self.mlp_norm(h))
+                partial_block = partial_block + mlp_out
+
+                return blocks, partial_block
+
+            else:  # full mode
+                # ---- Full mode ----
+                # Attend over block history before attention sublayer
+                h_attn = block_attn_res(blocks, partial_block, self.attn_res_proj, self.attn_res_norm, self.attn_res_bias)
+                h = self._apply_gate(partial_block, h_attn, sublayer="attn")
+                attn_out = self.attn(self.attn_norm(h))
+                partial_block = partial_block + attn_out
+                blocks = blocks + [partial_block]
+
+                # Attend over block history before MLP sublayer
+                h_mlp = block_attn_res(blocks, partial_block, self.mlp_res_proj, self.mlp_res_norm, self.mlp_res_bias)
+                h = self._apply_gate(partial_block, h_mlp, sublayer="mlp")
+                mlp_out = self.mlp(self.mlp_norm(h))
+                partial_block = partial_block + mlp_out
+                blocks = blocks + [partial_block]
+
+                return blocks, partial_block
         else:
             # Standard residual path (backward compatibility)
             partial_block = partial_block + self.attn(self.attn_norm(partial_block))
@@ -796,7 +820,7 @@ class GPT(nn.Module):
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)
         if self.attn_res_enabled and self.attnres_mode == "block":
-            self.final_res_proj = nn.Linear(model_dim, 1, bias=False)
+            self.final_res_proj = CastedLinear(model_dim, 1, bias=False)
             self.final_res_norm = RMSNorm()
             bias_init = attnres_recency_bias_init
             self.final_res_bias = nn.Parameter(torch.tensor(bias_init))
@@ -992,6 +1016,9 @@ def main() -> None:
     # - matrix params in transformer blocks use MATRIX_LR via Muon
     # - vectors/scalars use SCALAR_LR via Adam
     block_named_params = list(base_model.blocks.named_parameters())
+    if base_model.attn_res_enabled and base_model.attnres_mode == "block":
+        block_named_params += list(base_model.final_res_proj.named_parameters(prefix="final_res_proj"))
+        block_named_params += [("final_res_bias", base_model.final_res_bias)]
     matrix_params = [
         p
         for name, p in block_named_params
