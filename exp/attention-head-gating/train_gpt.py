@@ -580,7 +580,7 @@ class CausalSelfAttention(nn.Module):
             enable_gqa=(self.num_kv_heads != self.num_heads),
         )
         # trick: attention-head gating — apply learned per-head sigmoid gate (before merging heads)
-        gate = torch.sigmoid(self.attn_gate(x[..., :self.attn_gate_channels])).to(dtype=y.dtype)
+        gate = (2.0 * torch.sigmoid(self.attn_gate(x[..., :self.attn_gate_channels]))).to(dtype=y.dtype)
         y = y * gate.transpose(1, 2).unsqueeze(-1)
         y = y.transpose(1, 2).contiguous().reshape(bsz, seqlen, dim)
         return self.proj(y)
