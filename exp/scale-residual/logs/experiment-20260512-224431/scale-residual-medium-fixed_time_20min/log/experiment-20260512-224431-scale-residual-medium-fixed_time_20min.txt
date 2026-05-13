@@ -1,6 +1,12 @@
 """
-SwiGLU MLP experiment — replaces GELU MLP with SwiGLU (SiLU-gated MLP, LLaMA/Mistral style).
-Same architecture as baseline except MLP uses gate/up/down projections with F.silu gate.
+Baseline GPT + learnable attn_scale/mlp_scale ablation.
+
+Same as baseline (naive architecture + strong training recipe), but adds
+learnable per-dimension scaling on attention and MLP residual connections.
+
+trick: scale-residual — adds attn_scale and mlp_scale parameters (ones(dim))
+so residual connections become: x = x + scale * sublayer(norm(x)) instead of
+the standard x = x + sublayer(norm(x)).
 """
 
 from __future__ import annotations
@@ -24,20 +30,6 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
-
-# -----------------------------
-# functions and classes are defined in the order they are used in the main training loop, for readability
-# -----------------------------
-
-def silu_inplace_(x: torch.Tensor) -> torch.Tensor:
-    """
-    Safe inplace SiLU / Swish.
-    x: input tensor, modified in-place
-    """
-    # 先用临时变量存 sigmoid(x)
-    s = torch.sigmoid(x)   # 注意这里不是 inplace
-    x.mul_(s)              # 最后再 inplace 乘
-    return x
 
 # -----------------------------
 # HYPERPARAMETERS
@@ -126,7 +118,7 @@ CONTROL_TENSOR_NAME_PATTERNS = tuple(
     pattern
     for pattern in os.environ.get(
         "CONTROL_TENSOR_NAME_PATTERNS",
-        "",
+        "attn_scale,attn_scales,mlp_scale,mlp_scales",
     ).split(",")
     if pattern
 )
@@ -587,16 +579,14 @@ class CausalSelfAttention(nn.Module):
 
 
 class MLP(nn.Module):
-    # trick: SwiGLU -- gated SiLU (as in LLaMA/Mistral)
     def __init__(self, dim: int, mlp_mult: int):
         super().__init__()
         hidden = mlp_mult * dim
-        self.gate_proj = CastedLinear(dim, hidden, bias=False)
-        self.up_proj = CastedLinear(dim, hidden, bias=False)
-        self.down_proj = CastedLinear(hidden, dim, bias=False)
+        self.fc = CastedLinear(dim, hidden, bias=False)
+        self.proj = CastedLinear(hidden, dim, bias=False)
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.down_proj(silu_inplace_(self.gate_proj(x)) * self.up_proj(x))
+        return self.proj(F.gelu(self.fc(x)))
 
 
 class Block(nn.Module):
@@ -613,10 +603,12 @@ class Block(nn.Module):
         self.mlp_norm = RMSNorm()
         self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base)
         self.mlp = MLP(dim, mlp_mult)
+        self.attn_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))  # trick: scale-residual
+        self.mlp_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))  # trick: scale-residual
 
     def forward(self, x: Tensor) -> Tensor:
-        x = x + self.attn(self.attn_norm(x))
-        x = x + self.mlp(self.mlp_norm(x))
+        x = x + self.attn_scale.to(dtype=x.dtype)[None, None, :] * self.attn(self.attn_norm(x))  # trick: scale-residual
+        x = x + self.mlp_scale.to(dtype=x.dtype)[None, None, :] * self.mlp(self.mlp_norm(x))  # trick: scale-residual
         return x
 
 
@@ -1234,3 +1226,90 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+====================================================================================================
+Running Python 3.12.0 | packaged by Anaconda, Inc. | (main, Oct  2 2023, 17:29:18) [GCC 11.2.0]
+Running PyTorch 2.8.0+cu128
+Tue May 12 22:44:43 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 570.124.06             Driver Version: 570.124.06     CUDA Version: 12.9     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H100 80GB HBM3          On  |   00000000:84:00.0 Off |                    0 |
+| N/A   34C    P0            124W /  700W |    6505MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA H100 80GB HBM3          On  |   00000000:8B:00.0 Off |                    0 |
+| N/A   40C    P0            123W /  700W |    1518MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   2  NVIDIA H100 80GB HBM3          On  |   00000000:91:00.0 Off |                    0 |
+| N/A   38C    P0            126W /  700W |    1518MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   3  NVIDIA H100 80GB HBM3          On  |   00000000:E4:00.0 Off |                    0 |
+| N/A   33C    P0            122W /  700W |    1518MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
++-----------------------------------------------------------------------------------------+
+
+====================================================================================================
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:80
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:134254592
+world_size:4 grad_accum_steps:1
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:16 num_kv_heads:8
+tie_embeddings:False embed_lr:0.6 head_lr:0.008 matrix_lr:0.04 scalar_lr:0.04
+train_batch_tokens:524288 train_seq_len:1024 iterations:1000000 warmup_steps:50 max_wallclock_seconds:1200.000
+seed:1337
+warmup_step:10/50
+warmup_step:20/50
+warmup_step:30/50
+warmup_step:40/50
+warmup_step:50/50
+step:0/1000000 val_loss:6.9315 val_bpb:4.1052 train_time:0ms step_avg:0.02ms
+step:1/1000000 train_loss:6.9312 train_time:345ms step_avg:344.94ms
+step:2/1000000 train_loss:6.7750 train_time:794ms step_avg:396.81ms
+step:3/1000000 train_loss:5.3872 train_time:1246ms step_avg:415.23ms
+step:4/1000000 train_loss:5.9461 train_time:1697ms step_avg:424.29ms
+step:5/1000000 train_loss:5.6652 train_time:2149ms step_avg:429.87ms
+step:6/1000000 train_loss:5.4827 train_time:2600ms step_avg:433.38ms
+step:7/1000000 train_loss:5.1927 train_time:3053ms step_avg:436.13ms
+step:8/1000000 train_loss:5.1238 train_time:3505ms step_avg:438.12ms
+step:9/1000000 train_loss:4.9566 train_time:3957ms step_avg:439.69ms
+step:10/1000000 train_loss:4.8263 train_time:4409ms step_avg:440.93ms
+step:200/1000000 train_loss:2.6345 train_time:90833ms step_avg:454.16ms
+step:400/1000000 train_loss:2.1334 train_time:182342ms step_avg:455.86ms
+step:600/1000000 train_loss:2.3803 train_time:273446ms step_avg:455.74ms
+step:800/1000000 train_loss:2.2716 train_time:364410ms step_avg:455.51ms
+step:1000/1000000 train_loss:2.2194 train_time:455360ms step_avg:455.36ms
+step:1000/1000000 val_loss:2.1980 val_bpb:1.3018 train_time:455446ms step_avg:455.45ms
+step:1200/1000000 train_loss:2.1715 train_time:546224ms step_avg:455.19ms
+step:1400/1000000 train_loss:2.2734 train_time:637025ms step_avg:455.02ms
+step:1600/1000000 train_loss:2.0247 train_time:727593ms step_avg:454.75ms
+step:1800/1000000 train_loss:2.0608 train_time:818155ms step_avg:454.53ms
+step:2000/1000000 train_loss:2.0832 train_time:908555ms step_avg:454.28ms
+step:2000/1000000 val_loss:2.0610 val_bpb:1.2207 train_time:908641ms step_avg:454.32ms
+step:2200/1000000 train_loss:1.9441 train_time:998975ms step_avg:454.08ms
+step:2400/1000000 train_loss:1.9369 train_time:1089343ms step_avg:453.89ms
+step:2600/1000000 train_loss:2.1028 train_time:1179685ms step_avg:453.73ms
+step:2646/1000000 val_loss:1.9770 val_bpb:1.1709 train_time:1200491ms step_avg:453.70ms
+stopping_early: wallclock_cap train_time:1200491ms step:2646/1000000
+peak memory allocated: 69464 MiB reserved: 70098 MiB
+Serialized model: 534977339 bytes
+Code size: 50168 bytes
+Total submission size: 535027507 bytes
+final val_loss:1.9770 val_bpb:1.1709 eval_time:12777ms
+final_exact val_loss:1.97696887 val_bpb:1.17087232
+Wrote final metrics to /inspire/hdd/global_user/lipengfei-253107010003/my-proj/bags_tricks/Bag-of-tricks-for-Transformers/exp/scale-residual/logs/experiment-20260512-224431/scale-residual-medium-fixed_time_20min/result.json

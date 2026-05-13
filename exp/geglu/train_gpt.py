@@ -37,6 +37,26 @@ from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 # -----------------------------
+# functions and classes are defined in the order they are used in the main training loop, for readability
+# -----------------------------
+
+def gelu_tanh_inplace_(x: torch.Tensor) -> torch.Tensor:
+    """
+    Inplace GeLU (tanh approximation) for PyTorch.
+    x: input tensor, will be modified in-place
+    Returns x with inplace GeLU applied.
+    """
+    # 保存原张量以便 autograd 正确计算
+    # y = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+    # 近似公式，approximate='tanh'
+    coeff = 0.7978845608  # sqrt(2/pi)
+    x_cube = x * x * x
+    x_tanh = (coeff * (x + 0.044715 * x_cube)).tanh_()  # inplace tanh
+    x.mul_(0.5)           # inplace 乘 0.5
+    x.mul_(1 + x_tanh)    # inplace 乘以 (1 + tanh(...))
+    return x
+
+# -----------------------------
 # HYPERPARAMETERS
 # -----------------------------
 
@@ -593,7 +613,7 @@ class MLP(nn.Module):
         self.down_proj = CastedLinear(hidden, dim, bias=False)
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.down_proj(F.gelu(self.gate_proj(x), approximate='tanh') * self.up_proj(x))
+        return self.down_proj(gelu_tanh_inplace_(self.gate_proj(x)) * self.up_proj(x))
 
 
 class Block(nn.Module):

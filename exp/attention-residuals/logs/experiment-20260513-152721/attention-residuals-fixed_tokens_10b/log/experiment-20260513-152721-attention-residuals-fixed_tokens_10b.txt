@@ -1,6 +1,25 @@
 """
-SwiGLU MLP experiment — replaces GELU MLP with SwiGLU (SiLU-gated MLP, LLaMA/Mistral style).
-Same architecture as baseline except MLP uses gate/up/down projections with F.silu gate.
+Naive architecture GPT with strong training recipe.
+
+Architecture is standard (no tricks): GQA, RoPE, RMSNorm (no learnable weight), QK-Norm, Tied Embeddings,
+CastedLinear, restore_low_dim_params_to_fp32.
+
+Training recipe borrows from modded-nanogpt:
+  - Muon optimizer for matrix params, Adam for scalar/embed params with separate LRs
+  - Muon momentum warmup
+  - AdamW weight_decay=0.1 on embeddings + head, no weight decay on Muon/scalar params
+  - JIT warmup with state reset
+
+Removed architectural tricks (vs baseline-sp1024):
+  - U-Net skip connections → standard sequential blocks
+  - ReLU^2 MLP → GELU
+  - Q-Gain → removed
+  - Learnable resid_mix → standard residual x + sublayer(x)
+  - Learnable attn_scale/mlp_scale → standard residual
+  - Logit softcap → raw logits
+  - Input RMSNorm on embedding → removed
+  - Zero-init for output projections → default init
+  - Small embedding init (std=0.005) → default nn.Embedding init
 """
 
 from __future__ import annotations
@@ -26,20 +45,6 @@ from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 # -----------------------------
-# functions and classes are defined in the order they are used in the main training loop, for readability
-# -----------------------------
-
-def silu_inplace_(x: torch.Tensor) -> torch.Tensor:
-    """
-    Safe inplace SiLU / Swish.
-    x: input tensor, modified in-place
-    """
-    # 先用临时变量存 sigmoid(x)
-    s = torch.sigmoid(x)   # 注意这里不是 inplace
-    x.mul_(s)              # 最后再 inplace 乘
-    return x
-
-# -----------------------------
 # HYPERPARAMETERS
 # -----------------------------
 
@@ -50,7 +55,7 @@ class Hyperparameters:
     val_files = os.environ.get("VAL_FILES", os.path.join(data_path, "fineweb_val_*.bin"))
     tokenizer_path = os.environ.get("TOKENIZER_PATH", "./data/tokenizers/fineweb_1024_bpe.model")
     run_id = os.environ.get("RUN_ID", str(uuid.uuid4()))
-    output_dir = os.environ.get("OUTPUT_DIR", str(Path(__file__).parent / "logs"))
+    output_dir = os.environ.get("OUTPUT_DIR", "logs")
     experiment_name = os.environ.get("EXPERIMENT_NAME", run_id)
     control_mode = os.environ.get("CONTROL_MODE", "single_run")
     target_train_tokens = int(os.environ.get("TARGET_TRAIN_TOKENS", "0"))
@@ -96,6 +101,18 @@ class Hyperparameters:
     weight_decay = float(os.environ.get("WEIGHT_DECAY", "0.1"))
     grad_clip_norm = float(os.environ.get("GRAD_CLIP_NORM", 0.0))
 
+    # trick: attention-residuals — enable/disable attention residuals
+    attn_res_enabled = bool(int(os.environ.get("ATTN_RES_ENABLED", "1")))
+
+    # trick: attention-residuals — number of blocks to group layers into
+    attn_res_num_blocks = int(os.environ.get("ATTN_RES_NUM_BLOCKS", "3"))
+
+    # trick: attention-residuals — initial recency bias for current block
+    attnres_recency_bias_init = float(os.environ.get("ATTNRES_RECENCY_BIAS_INIT", "0.0"))
+
+    # trick: attention-residuals attn model — "block" attends to block-level summaries, "full" attends to all layers
+    attnres_mode = os.environ.get("ATTNRES_MODE", "full")
+
     # Optional W&B logging
     enable_wandb = bool(int(os.environ.get("ENABLE_WANDB", "1")))
     wandb_project = os.environ.get("WANDB_PROJECT", "bag-of-tricks-for-transformers")
@@ -122,6 +139,7 @@ def hyperparameters_to_dict(args: Hyperparameters) -> dict[str, object]:
 # As borrowed from modded-nanogpt
 # Background on Muon: https://kellerjordan.github.io/posts/muon/
 
+# trick: attention-residuals — attn_res_bias, mlp_res_bias, attn_res_proj, mlp_res_proj are control params (fp32, Adam)
 CONTROL_TENSOR_NAME_PATTERNS = tuple(
     pattern
     for pattern in os.environ.get(
@@ -493,6 +511,46 @@ class RMSNorm(nn.Module):
         return F.rms_norm(x, (x.size(-1),), eps=self.eps)
 
 
+# trick: attention-residuals — core attention residual function
+def block_attn_res(
+    blocks: list[Tensor],
+    partial_block: Tensor,
+    proj: nn.Module,
+    norm: nn.Module,
+    recency_bias: nn.Parameter,
+) -> Tensor:
+    """
+    Attend over all block representations + current partial block.
+
+    Args:
+        blocks: List of completed block tensors [(B, T, D), ...]
+        partial_block: Current intra-block partial sum (B, T, D)
+        proj: CastedLinear(D, 1, bias=False) - learned query projection
+        norm: RMSNorm - key normalization
+        recency_bias: Scalar bias added to current block logits
+
+    Returns:
+        h: Weighted aggregation (B, T, D)
+    """
+    # Stack all blocks + current partial_block as values
+    V = torch.stack(blocks + [partial_block], dim=0)  # (N+1, B, T, D)
+
+    # Normalize to get keys
+    K = norm(V)  # (N+1, B, T, D)
+
+    # Compute attention logits with learned query
+    logits = proj(K).squeeze(-1)  # (N+1, B, T)
+
+    # Add recency bias to current block (initialization trick)
+    logits[-1] = logits[-1] + recency_bias
+
+    # Softmax and weighted sum
+    attn_weights = F.softmax(logits, dim=0)  # (N+1, B, T)
+    h = torch.sum(attn_weights.unsqueeze(-1) * V, dim=0)  # (B, T, D)
+
+    return h
+
+
 class CastedLinear(nn.Linear):
     # Keep weights in fp32 for optimizer/state quality, cast at matmul time for bf16 compute.
     def forward(self, x: Tensor) -> Tensor:
@@ -587,16 +645,14 @@ class CausalSelfAttention(nn.Module):
 
 
 class MLP(nn.Module):
-    # trick: SwiGLU -- gated SiLU (as in LLaMA/Mistral)
     def __init__(self, dim: int, mlp_mult: int):
         super().__init__()
         hidden = mlp_mult * dim
-        self.gate_proj = CastedLinear(dim, hidden, bias=False)
-        self.up_proj = CastedLinear(dim, hidden, bias=False)
-        self.down_proj = CastedLinear(hidden, dim, bias=False)
+        self.fc = CastedLinear(dim, hidden, bias=False)
+        self.proj = CastedLinear(hidden, dim, bias=False)
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.down_proj(silu_inplace_(self.gate_proj(x)) * self.up_proj(x))
+        return self.proj(F.gelu(self.fc(x)))
 
 
 class Block(nn.Module):
@@ -607,6 +663,12 @@ class Block(nn.Module):
         num_kv_heads: int,
         mlp_mult: int,
         rope_base: float,
+        layer_idx: int | None = None,  # trick: attention-residuals
+        layers_per_block: int | None = None,  # trick: attention-residuals
+        attn_res_enabled: bool = True,  # trick: attention-residuals
+        attnres_gate_type: str = "bias",  # trick: attention-residuals
+        attnres_recency_bias_init: float = 0.0,  # trick: attention-residuals
+        attnres_mode: str = "full",  # trick: attention-residuals
     ):
         super().__init__()
         self.attn_norm = RMSNorm()
@@ -614,11 +676,101 @@ class Block(nn.Module):
         self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base)
         self.mlp = MLP(dim, mlp_mult)
 
-    def forward(self, x: Tensor) -> Tensor:
-        x = x + self.attn(self.attn_norm(x))
-        x = x + self.mlp(self.mlp_norm(x))
-        return x
+        # trick: attention-residuals — store configuration
+        self.layer_idx = layer_idx
+        self.layers_per_block = layers_per_block
+        self.attn_res_enabled = attn_res_enabled
+        self.gate_type = attnres_gate_type
+        self.attnres_mode = attnres_mode
+        self.attnres_recency_bias_init = attnres_recency_bias_init
+        self.attn_res_proj = CastedLinear(dim, 1, bias=False)
+        self.attn_res_norm = RMSNorm()
+        self.mlp_res_proj = CastedLinear(dim, 1, bias=False)
+        self.mlp_res_norm = RMSNorm()
+        # trick: attention-residuals — always create bias params (reference always creates them)
+        if self.gate_type == "bias":
+            self.attn_res_bias = nn.Parameter(torch.tensor(attnres_recency_bias_init))
+            self.mlp_res_bias = nn.Parameter(torch.tensor(attnres_recency_bias_init))
+        else:
+            self.attn_res_bias = nn.Parameter(torch.tensor(0.0))
+            self.mlp_res_bias = nn.Parameter(torch.tensor(0.0))
 
+    @property
+    def is_block_boundary(self) -> bool:
+        """True when this layer is the last in its block."""
+        return (self.layer_idx + 1) % self.layers_per_block == 0
+
+    @property
+    def is_new_block_start(self) -> bool:
+        """True when this is the first layer of a new block (not block 0)."""
+        return self.layer_idx > 0 and self.layer_idx % self.layers_per_block == 0
+
+    def _apply_gate(self, hidden_states, h_attn, sublayer: str):
+        """only support bias now"""
+        #TODO support other gate types
+        """Apply gating between residual stream and AttnRes output."""
+        if self.gate_type == "sigmoid_scalar":
+            logit = self.attn_res_gate_logit if sublayer == "attn" else self.mlp_res_gate_logit
+            gate = torch.sigmoid(logit)
+            return (1 - gate) * hidden_states + gate * h_attn
+        elif self.gate_type == "sigmoid_vector":
+            gate_proj = self.attn_res_gate_proj if sublayer == "attn" else self.mlp_res_gate_proj
+            gate = torch.sigmoid(gate_proj(hidden_states))  # (B, T, D)
+            return (1 - gate) * hidden_states + gate * h_attn
+        elif self.gate_type == "learnable_alpha":
+            alpha = self.attn_res_alpha if sublayer == "attn" else self.mlp_res_alpha
+            return (1 - alpha) * hidden_states + alpha * h_attn
+        else:
+            # "bias" mode: no gate, AttnRes output used directly
+            return h_attn
+
+    def forward(self, blocks: list[Tensor] | None = None, partial_block: Tensor | None = None) -> tuple:
+        # trick: attention-residuals — branch on whether attention residuals are enabled
+        if self.attn_res_enabled and blocks is not None:
+            if self.attnres_mode == "block":
+                # ---- Block mode ----
+                # Attend over block history before attention sublayer
+                h_attn = block_attn_res(blocks, partial_block, self.attn_res_proj, self.attn_res_norm, self.attn_res_bias)
+                h = self._apply_gate(partial_block, h_attn, sublayer="attn")
+
+                # New block boundary: store old partial, reset
+                if self.is_new_block_start:
+                    blocks = blocks + [partial_block]
+                    partial_block = torch.zeros_like(partial_block)
+
+                attn_out = self.attn(self.attn_norm(h))
+                partial_block = partial_block + attn_out
+
+                # Attend over block history before MLP sublayer
+                h_mlp = block_attn_res(blocks, partial_block, self.mlp_res_proj, self.mlp_res_norm, self.mlp_res_bias)
+                h = self._apply_gate(partial_block, h_mlp, sublayer="mlp")
+                mlp_out = self.mlp(self.mlp_norm(h))
+                partial_block = partial_block + mlp_out
+
+                return blocks, partial_block
+
+            else:  # full mode
+                # ---- Full mode ----
+                # Attend over block history before attention sublayer
+                h_attn = block_attn_res(blocks, partial_block, self.attn_res_proj, self.attn_res_norm, self.attn_res_bias)
+                h = self._apply_gate(partial_block, h_attn, sublayer="attn")
+                attn_out = self.attn(self.attn_norm(h))
+                partial_block = partial_block + attn_out
+                blocks = blocks + [partial_block]
+
+                # Attend over block history before MLP sublayer
+                h_mlp = block_attn_res(blocks, partial_block, self.mlp_res_proj, self.mlp_res_norm, self.mlp_res_bias)
+                h = self._apply_gate(partial_block, h_mlp, sublayer="mlp")
+                mlp_out = self.mlp(self.mlp_norm(h))
+                partial_block = partial_block + mlp_out
+                blocks = blocks + [partial_block]
+
+                return blocks, partial_block
+        else:
+            # Standard residual path (backward compatibility)
+            partial_block = partial_block + self.attn(self.attn_norm(partial_block))
+            partial_block = partial_block + self.mlp(self.mlp_norm(partial_block))
+            return partial_block
 
 class GPT(nn.Module):
     def __init__(
@@ -631,9 +783,22 @@ class GPT(nn.Module):
         mlp_mult: int,
         tie_embeddings: bool,
         rope_base: float,
+        attn_res_enabled: bool = False,  # trick: attention-residuals
+        attnres_mode: str = "full",  # trick: attention-residuals ["full", "block"]
+        attn_res_num_blocks: int = 3,  # trick: attention-residuals
+        attnres_recency_bias_init: float = 0.0,  # trick: attention-residuals
     ):
         super().__init__()
         self.tie_embeddings = tie_embeddings
+        self.attn_res_enabled = attn_res_enabled  # trick: attention-residuals
+        self.attnres_mode = attnres_mode  # trick: attention-residuals
+
+        # trick: attention-residuals — calculate layers per block
+        if attn_res_enabled:
+            self.layers_per_block = max(1, (num_layers + attn_res_num_blocks - 1) // attn_res_num_blocks)
+        else:
+            self.layers_per_block = None
+
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
         self.blocks = nn.ModuleList(
             [
@@ -643,20 +808,32 @@ class GPT(nn.Module):
                     num_kv_heads,
                     mlp_mult,
                     rope_base,
+                    layer_idx=i,  # trick: attention-residuals
+                    layers_per_block=self.layers_per_block,  # trick: attention-residuals
+                    attn_res_enabled=attn_res_enabled,  # trick: attention-residuals
+                    attnres_mode=attnres_mode,  # trick: attention-residuals
+                    attnres_recency_bias_init=attnres_recency_bias_init,  # trick: attention-residuals
                 )
-                for _ in range(num_layers)
+                for i in range(num_layers)
             ]
         )
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)
+        if self.attn_res_enabled and self.attnres_mode == "block":
+            self.final_res_proj = CastedLinear(model_dim, 1, bias=False)
+            self.final_res_norm = RMSNorm()
+            bias_init = attnres_recency_bias_init
+            self.final_res_bias = nn.Parameter(torch.tensor(bias_init))
+
         self._init_weights()
 
     
     def _init_weights(self):
         for name, module in self.named_modules():
             if isinstance(module, nn.Linear):
-                if name.endswith('.proj'):
+                if name.endswith('.proj') and not name.endswith('res_proj'):
                     # Output projections (attn.proj, mlp.proj): zero init
+                    # Exclude attn_res_proj, mlp_res_proj, final_res_proj — reference uses Normal(0, 0.02)
                     nn.init.zeros_(module.weight)
                 elif name == 'lm_head':
                     # LM head: small normal
@@ -673,18 +850,35 @@ class GPT(nn.Module):
                 nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, input_ids: Tensor, target_ids: Tensor) -> Tensor:
-        x = self.tok_emb(input_ids)
-        for block in self.blocks:
-            x = block(x)
-        x = self.final_norm(x).reshape(-1, x.size(-1))
+        input_embeds = self.tok_emb(input_ids)
+
+        # trick: attention-residuals — branch on whether attention residuals are enabled
+        if self.attn_res_enabled:
+            # trick: attention-residuals — initialize blocks list with embedding as block 0 (no detach)
+            blocks = [input_embeds]
+            partial_block = input_embeds
+
+            for block in self.blocks:
+                blocks, partial_block = block(blocks, partial_block)
+
+        else:
+            # Standard sequential path (backward compatibility)
+            for block in self.blocks:
+                partial_block = block(blocks, partial_block)
+        if self.attn_res_enabled and self.attnres_mode == "block":
+            partial_block = block_attn_res(blocks, partial_block, 
+                                           self.final_res_proj, self.final_res_norm, self.final_res_bias)
+
+        partial_block = self.final_norm(partial_block).reshape(-1, partial_block.size(-1))
         targets = target_ids.reshape(-1)
         if self.tie_embeddings:
-            logits = F.linear(x, self.tok_emb.weight)
+            logits = F.linear(partial_block, self.tok_emb.weight)
         else:
             if self.lm_head is None:
                 raise RuntimeError("lm_head is required when tie_embeddings=False")
-            logits = self.lm_head(x)
+            logits = self.lm_head(partial_block)
         return F.cross_entropy(logits.float(), targets, reduction="mean")
+
 
 
 # -----------------------------
@@ -804,6 +998,10 @@ def main() -> None:
         mlp_mult=args.mlp_mult,
         tie_embeddings=args.tie_embeddings,
         rope_base=args.rope_base,
+        attn_res_enabled=args.attn_res_enabled,  # trick: attention-residuals
+        attn_res_num_blocks=args.attn_res_num_blocks,  # trick: attention-residuals
+        attnres_recency_bias_init=args.attnres_recency_bias_init,  # trick: attention-residuals
+        attnres_mode=args.attnres_mode,  # trick: attention-residuals
     ).to(device).bfloat16()
     for module in base_model.modules():
         if isinstance(module, CastedLinear):
@@ -818,6 +1016,9 @@ def main() -> None:
     # - matrix params in transformer blocks use MATRIX_LR via Muon
     # - vectors/scalars use SCALAR_LR via Adam
     block_named_params = list(base_model.blocks.named_parameters())
+    if base_model.attn_res_enabled and base_model.attnres_mode == "block":
+        block_named_params += list(base_model.final_res_proj.named_parameters(prefix="final_res_proj"))
+        block_named_params += [("final_res_bias", base_model.final_res_bias)]
     matrix_params = [
         p
         for name, p in block_named_params
@@ -877,6 +1078,10 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
+
+    if args.attn_res_enabled:
+        # trick: attention-residuals
+        log0(f"Attention Residuals: enabled, num_blocks={args.attn_res_num_blocks}, layers_per_block={base_model.layers_per_block}, recency_bias_init={args.attnres_recency_bias_init}")
 
     if master_process and args.enable_wandb and args.wandb_mode != "disabled":
         try:
@@ -1234,3 +1439,189 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+====================================================================================================
+Running Python 3.12.0 | packaged by Anaconda, Inc. | (main, Oct  2 2023, 17:29:18) [GCC 11.2.0]
+Running PyTorch 2.8.0+cu128
+Wed May 13 15:51:52 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 570.124.06             Driver Version: 570.124.06     CUDA Version: 12.9     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H100 80GB HBM3          On  |   00000000:84:00.0 Off |                    0 |
+| N/A   32C    P0            121W /  700W |    4076MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA H100 80GB HBM3          On  |   00000000:8B:00.0 Off |                    0 |
+| N/A   37C    P0            121W /  700W |    1584MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   2  NVIDIA H100 80GB HBM3          On  |   00000000:91:00.0 Off |                    0 |
+| N/A   36C    P0            127W /  700W |    1584MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   3  NVIDIA H100 80GB HBM3          On  |   00000000:E4:00.0 Off |                    0 |
+| N/A   31C    P0            121W /  700W |    1584MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
++-----------------------------------------------------------------------------------------+
+
+====================================================================================================
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:80
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:17572882
+world_size:4 grad_accum_steps:1
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:8 num_kv_heads:4
+tie_embeddings:False embed_lr:0.6 head_lr:0.008 matrix_lr:0.04 scalar_lr:0.04
+train_batch_tokens:524288 train_seq_len:1024 iterations:19074 warmup_steps:50 max_wallclock_seconds:0.000
+seed:1337
+Attention Residuals: enabled, num_blocks=9, layers_per_block=1, recency_bias_init=0.0
+warmup_step:10/50
+warmup_step:20/50
+warmup_step:30/50
+warmup_step:40/50
+warmup_step:50/50
+step:0/19074 val_loss:6.9320 val_bpb:4.1055 train_time:0ms step_avg:0.03ms
+step:1/19074 train_loss:6.9321 train_time:262ms step_avg:262.17ms
+step:2/19074 train_loss:6.8638 train_time:527ms step_avg:263.67ms
+step:3/19074 train_loss:5.3115 train_time:795ms step_avg:264.90ms
+step:4/19074 train_loss:5.0177 train_time:1062ms step_avg:265.45ms
+step:5/19074 train_loss:4.7653 train_time:1329ms step_avg:265.79ms
+step:6/19074 train_loss:4.7961 train_time:1596ms step_avg:265.99ms
+step:7/19074 train_loss:4.5320 train_time:1863ms step_avg:266.12ms
+step:8/19074 train_loss:4.5255 train_time:2131ms step_avg:266.31ms
+step:9/19074 train_loss:4.4616 train_time:2398ms step_avg:266.41ms
+step:10/19074 train_loss:4.4538 train_time:2665ms step_avg:266.48ms
+step:200/19074 train_loss:2.7256 train_time:53159ms step_avg:265.80ms
+step:400/19074 train_loss:2.3197 train_time:106413ms step_avg:266.03ms
+step:600/19074 train_loss:2.5546 train_time:159593ms step_avg:265.99ms
+step:800/19074 train_loss:2.4391 train_time:212746ms step_avg:265.93ms
+step:1000/19074 train_loss:2.3933 train_time:265981ms step_avg:265.98ms
+step:1000/19074 val_loss:2.3826 val_bpb:1.4111 train_time:265987ms step_avg:265.99ms
+step:1200/19074 train_loss:2.3605 train_time:319345ms step_avg:266.12ms
+step:1400/19074 train_loss:2.4551 train_time:372602ms step_avg:266.14ms
+step:1600/19074 train_loss:2.2222 train_time:425801ms step_avg:266.13ms
+step:1800/19074 train_loss:2.2729 train_time:478962ms step_avg:266.09ms
+step:2000/19074 train_loss:2.2911 train_time:532129ms step_avg:266.06ms
+step:2000/19074 val_loss:2.2812 val_bpb:1.3511 train_time:532134ms step_avg:266.07ms
+step:2200/19074 train_loss:2.1929 train_time:585336ms step_avg:266.06ms
+step:2400/19074 train_loss:2.1857 train_time:638543ms step_avg:266.06ms
+step:2600/19074 train_loss:2.3684 train_time:691814ms step_avg:266.08ms
+step:2800/19074 train_loss:2.2205 train_time:744986ms step_avg:266.07ms
+step:3000/19074 train_loss:2.2240 train_time:798114ms step_avg:266.04ms
+step:3000/19074 val_loss:2.2385 val_bpb:1.3258 train_time:798120ms step_avg:266.04ms
+step:3200/19074 train_loss:2.2788 train_time:851277ms step_avg:266.02ms
+step:3400/19074 train_loss:2.1717 train_time:904598ms step_avg:266.06ms
+step:3600/19074 train_loss:2.2036 train_time:957842ms step_avg:266.07ms
+step:3800/19074 train_loss:2.2322 train_time:1010948ms step_avg:266.04ms
+step:4000/19074 train_loss:2.2163 train_time:1064092ms step_avg:266.02ms
+step:4000/19074 val_loss:2.2143 val_bpb:1.3115 train_time:1064098ms step_avg:266.02ms
+step:4200/19074 train_loss:2.2342 train_time:1117498ms step_avg:266.07ms
+step:4400/19074 train_loss:2.2386 train_time:1170654ms step_avg:266.06ms
+step:4600/19074 train_loss:2.0461 train_time:1223760ms step_avg:266.03ms
+step:4800/19074 train_loss:2.2516 train_time:1276919ms step_avg:266.02ms
+step:5000/19074 train_loss:2.1445 train_time:1330025ms step_avg:266.00ms
+step:5000/19074 val_loss:2.1972 val_bpb:1.3013 train_time:1330031ms step_avg:266.01ms
+step:5200/19074 train_loss:2.2304 train_time:1383189ms step_avg:266.00ms
+step:5400/19074 train_loss:2.2209 train_time:1436315ms step_avg:265.98ms
+step:5600/19074 train_loss:2.2691 train_time:1489426ms step_avg:265.97ms
+step:5800/19074 train_loss:2.1981 train_time:1542596ms step_avg:265.96ms
+step:6000/19074 train_loss:2.2121 train_time:1595708ms step_avg:265.95ms
+step:6000/19074 val_loss:2.1876 val_bpb:1.2956 train_time:1595714ms step_avg:265.95ms
+step:6200/19074 train_loss:2.1572 train_time:1648858ms step_avg:265.94ms
+step:6400/19074 train_loss:2.1843 train_time:1701991ms step_avg:265.94ms
+step:6600/19074 train_loss:2.1652 train_time:1755125ms step_avg:265.93ms
+step:6800/19074 train_loss:2.1624 train_time:1808339ms step_avg:265.93ms
+step:7000/19074 train_loss:2.2428 train_time:1861461ms step_avg:265.92ms
+step:7000/19074 val_loss:2.1757 val_bpb:1.2886 train_time:1861467ms step_avg:265.92ms
+step:7200/19074 train_loss:2.2268 train_time:1914541ms step_avg:265.91ms
+step:7400/19074 train_loss:2.1354 train_time:1967684ms step_avg:265.90ms
+step:7600/19074 train_loss:2.0439 train_time:2020858ms step_avg:265.90ms
+step:7800/19074 train_loss:2.1509 train_time:2073943ms step_avg:265.89ms
+step:8000/19074 train_loss:2.1532 train_time:2127022ms step_avg:265.88ms
+step:8000/19074 val_loss:2.1664 val_bpb:1.2831 train_time:2127028ms step_avg:265.88ms
+step:8200/19074 train_loss:2.1691 train_time:2180127ms step_avg:265.87ms
+step:8400/19074 train_loss:2.1339 train_time:2233382ms step_avg:265.88ms
+step:8600/19074 train_loss:2.1720 train_time:2286529ms step_avg:265.88ms
+step:8800/19074 train_loss:2.1394 train_time:2339751ms step_avg:265.88ms
+step:9000/19074 train_loss:2.0478 train_time:2392862ms step_avg:265.87ms
+step:9000/19074 val_loss:2.1617 val_bpb:1.2803 train_time:2392868ms step_avg:265.87ms
+step:9200/19074 train_loss:2.0855 train_time:2446246ms step_avg:265.90ms
+step:9400/19074 train_loss:2.1724 train_time:2499348ms step_avg:265.89ms
+step:9600/19074 train_loss:2.1899 train_time:2552498ms step_avg:265.89ms
+step:9800/19074 train_loss:2.0901 train_time:2605595ms step_avg:265.88ms
+step:10000/19074 train_loss:2.1335 train_time:2658699ms step_avg:265.87ms
+step:10000/19074 val_loss:2.1554 val_bpb:1.2766 train_time:2658705ms step_avg:265.87ms
+step:10200/19074 train_loss:2.1784 train_time:2712219ms step_avg:265.90ms
+step:10400/19074 train_loss:2.0607 train_time:2765347ms step_avg:265.90ms
+step:10600/19074 train_loss:2.0810 train_time:2818494ms step_avg:265.90ms
+step:10800/19074 train_loss:2.2167 train_time:2871588ms step_avg:265.89ms
+step:11000/19074 train_loss:2.1246 train_time:2924698ms step_avg:265.88ms
+step:11000/19074 val_loss:2.1494 val_bpb:1.2730 train_time:2924704ms step_avg:265.88ms
+step:11200/19074 train_loss:2.1591 train_time:2977984ms step_avg:265.89ms
+step:11400/19074 train_loss:2.1185 train_time:3031081ms step_avg:265.88ms
+step:11600/19074 train_loss:2.0931 train_time:3084153ms step_avg:265.88ms
+step:11800/19074 train_loss:2.1547 train_time:3137404ms step_avg:265.88ms
+step:12000/19074 train_loss:2.1409 train_time:3190581ms step_avg:265.88ms
+step:12000/19074 val_loss:2.1441 val_bpb:1.2699 train_time:3190587ms step_avg:265.88ms
+step:12200/19074 train_loss:2.2411 train_time:3243694ms step_avg:265.88ms
+step:12400/19074 train_loss:2.0202 train_time:3297112ms step_avg:265.90ms
+step:12600/19074 train_loss:2.1193 train_time:3350240ms step_avg:265.89ms
+step:12800/19074 train_loss:2.1886 train_time:3403338ms step_avg:265.89ms
+step:13000/19074 train_loss:2.1476 train_time:3456484ms step_avg:265.88ms
+step:13000/19074 val_loss:2.1417 val_bpb:1.2684 train_time:3456491ms step_avg:265.88ms
+step:13200/19074 train_loss:2.1848 train_time:3509674ms step_avg:265.88ms
+step:13400/19074 train_loss:2.0818 train_time:3562721ms step_avg:265.87ms
+step:13600/19074 train_loss:2.0724 train_time:3616393ms step_avg:265.91ms
+step:13800/19074 train_loss:2.0742 train_time:3669611ms step_avg:265.91ms
+step:14000/19074 train_loss:2.1758 train_time:3722788ms step_avg:265.91ms
+step:14000/19074 val_loss:2.1379 val_bpb:1.2662 train_time:3722794ms step_avg:265.91ms
+step:14200/19074 train_loss:2.1980 train_time:3775905ms step_avg:265.91ms
+step:14400/19074 train_loss:2.2401 train_time:3829081ms step_avg:265.91ms
+step:14600/19074 train_loss:2.0910 train_time:3882255ms step_avg:265.91ms
+step:14800/19074 train_loss:2.0749 train_time:3935329ms step_avg:265.90ms
+step:15000/19074 train_loss:2.1464 train_time:3988388ms step_avg:265.89ms
+step:15000/19074 val_loss:2.1325 val_bpb:1.2630 train_time:3988394ms step_avg:265.89ms
+step:15200/19074 train_loss:2.1670 train_time:4041484ms step_avg:265.89ms
+step:15400/19074 train_loss:2.1034 train_time:4094563ms step_avg:265.88ms
+step:15600/19074 train_loss:2.1284 train_time:4147642ms step_avg:265.87ms
+step:15800/19074 train_loss:2.0102 train_time:4200790ms step_avg:265.87ms
+step:16000/19074 train_loss:2.2159 train_time:4253955ms step_avg:265.87ms
+step:16000/19074 val_loss:2.1302 val_bpb:1.2616 train_time:4253961ms step_avg:265.87ms
+step:16200/19074 train_loss:2.0843 train_time:4307035ms step_avg:265.87ms
+step:16400/19074 train_loss:2.1431 train_time:4360164ms step_avg:265.86ms
+step:16600/19074 train_loss:2.0719 train_time:4413991ms step_avg:265.90ms
+step:16800/19074 train_loss:2.1692 train_time:4467129ms step_avg:265.90ms
+step:17000/19074 train_loss:2.1356 train_time:4520220ms step_avg:265.90ms
+step:17000/19074 val_loss:2.1282 val_bpb:1.2604 train_time:4520226ms step_avg:265.90ms
+step:17200/19074 train_loss:2.1306 train_time:4573353ms step_avg:265.89ms
+step:17400/19074 train_loss:2.0427 train_time:4626575ms step_avg:265.90ms
+step:17600/19074 train_loss:2.1593 train_time:4679658ms step_avg:265.89ms
+step:17800/19074 train_loss:2.1635 train_time:4732856ms step_avg:265.89ms
+step:18000/19074 train_loss:2.0956 train_time:4786062ms step_avg:265.89ms
+step:18000/19074 val_loss:2.1156 val_bpb:1.2530 train_time:4786068ms step_avg:265.89ms
+step:18200/19074 train_loss:2.2378 train_time:4839163ms step_avg:265.89ms
+step:18400/19074 train_loss:2.0769 train_time:4892273ms step_avg:265.88ms
+step:18600/19074 train_loss:2.0313 train_time:4945395ms step_avg:265.88ms
+step:18800/19074 train_loss:2.1507 train_time:4998479ms step_avg:265.88ms
+step:19000/19074 train_loss:2.0667 train_time:5051662ms step_avg:265.88ms
+step:19000/19074 val_loss:2.0854 val_bpb:1.2351 train_time:5051668ms step_avg:265.88ms
+step:19074/19074 val_loss:2.0845 val_bpb:1.2346 train_time:5071453ms step_avg:265.88ms
+peak memory allocated: 68557 MiB reserved: 68664 MiB
+Serialized model: 69278807 bytes
+Code size: 60906 bytes
+Total submission size: 69339713 bytes
+final val_loss:2.0845 val_bpb:1.2346 eval_time:11491ms
+final_exact val_loss:2.08451224 val_bpb:1.23456556
+Wrote final metrics to /inspire/hdd/global_user/lipengfei-253107010003/my-proj/bags_tricks/Bag-of-tricks-for-Transformers/exp/attention-residuals/logs/experiment-20260513-152721/attention-residuals-fixed_tokens_10b/result.json

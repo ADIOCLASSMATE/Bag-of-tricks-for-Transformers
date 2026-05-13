@@ -1,6 +1,12 @@
 """
-SwiGLU MLP experiment — replaces GELU MLP with SwiGLU (SiLU-gated MLP, LLaMA/Mistral style).
-Same architecture as baseline except MLP uses gate/up/down projections with F.silu gate.
+Baseline GPT + U-Net skip connections ablation.
+
+Same as baseline (naive architecture + strong training recipe), but adds U-Net
+skip connections with learnable skip_weights. First half of layers store skip
+activations; second half combines them in reverse order.
+
+trick: U-Net skip connections — encoder layers store activations, decoder layers
+receive them with learnable per-skip scaling (skip_weights, initialized to 1.0).
 """
 
 from __future__ import annotations
@@ -24,20 +30,6 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
-
-# -----------------------------
-# functions and classes are defined in the order they are used in the main training loop, for readability
-# -----------------------------
-
-def silu_inplace_(x: torch.Tensor) -> torch.Tensor:
-    """
-    Safe inplace SiLU / Swish.
-    x: input tensor, modified in-place
-    """
-    # 先用临时变量存 sigmoid(x)
-    s = torch.sigmoid(x)   # 注意这里不是 inplace
-    x.mul_(s)              # 最后再 inplace 乘
-    return x
 
 # -----------------------------
 # HYPERPARAMETERS
@@ -122,11 +114,12 @@ def hyperparameters_to_dict(args: Hyperparameters) -> dict[str, object]:
 # As borrowed from modded-nanogpt
 # Background on Muon: https://kellerjordan.github.io/posts/muon/
 
+# trick: unet-skip — skip_weights are control params (scalar, kept fp32, go to Adam not Muon)
 CONTROL_TENSOR_NAME_PATTERNS = tuple(
     pattern
     for pattern in os.environ.get(
         "CONTROL_TENSOR_NAME_PATTERNS",
-        "",
+        "skip_weight,skip_weights",
     ).split(",")
     if pattern
 )
@@ -587,16 +580,14 @@ class CausalSelfAttention(nn.Module):
 
 
 class MLP(nn.Module):
-    # trick: SwiGLU -- gated SiLU (as in LLaMA/Mistral)
     def __init__(self, dim: int, mlp_mult: int):
         super().__init__()
         hidden = mlp_mult * dim
-        self.gate_proj = CastedLinear(dim, hidden, bias=False)
-        self.up_proj = CastedLinear(dim, hidden, bias=False)
-        self.down_proj = CastedLinear(hidden, dim, bias=False)
+        self.fc = CastedLinear(dim, hidden, bias=False)
+        self.proj = CastedLinear(hidden, dim, bias=False)
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.down_proj(silu_inplace_(self.gate_proj(x)) * self.up_proj(x))
+        return self.proj(F.gelu(self.fc(x)))
 
 
 class Block(nn.Module):
@@ -635,6 +626,10 @@ class GPT(nn.Module):
         super().__init__()
         self.tie_embeddings = tie_embeddings
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
+        self.num_encoder_layers = num_layers // 2  # trick: unet-skip
+        self.num_decoder_layers = num_layers - self.num_encoder_layers  # trick: unet-skip
+        self.num_skip_weights = min(self.num_encoder_layers, self.num_decoder_layers)  # trick: unet-skip
+        self.skip_weights = nn.Parameter(torch.ones(self.num_skip_weights, model_dim, dtype=torch.float32))  # trick: unet-skip
         self.blocks = nn.ModuleList(
             [
                 Block(
@@ -674,8 +669,17 @@ class GPT(nn.Module):
 
     def forward(self, input_ids: Tensor, target_ids: Tensor) -> Tensor:
         x = self.tok_emb(input_ids)
-        for block in self.blocks:
-            x = block(x)
+        skips: list[Tensor] = []  # trick: unet-skip
+
+        # trick: unet-skip — First half stores skips; second half reuses them in reverse order.
+        for i in range(self.num_encoder_layers):
+            x = self.blocks[i](x)
+            skips.append(x)
+        for i in range(self.num_decoder_layers):
+            if skips:
+                x = x + self.skip_weights[i].to(dtype=x.dtype)[None, None, :] * skips.pop()  # trick: unet-skip
+            x = self.blocks[self.num_encoder_layers + i](x)
+
         x = self.final_norm(x).reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
         if self.tie_embeddings:
@@ -828,6 +832,9 @@ def main() -> None:
         for name, p in block_named_params
         if p.ndim < 2 or any(pattern in name for pattern in CONTROL_TENSOR_NAME_PATTERNS)
     ]
+    # trick: unet-skip — skip_weights are scalar control params, go to Adam
+    if base_model.skip_weights.numel() > 0:
+        scalar_params.append(base_model.skip_weights)
     token_lr = args.tied_embed_lr if args.tie_embeddings else args.embed_lr
     optimizer_tok = torch.optim.AdamW(
         [{"params": [base_model.tok_emb.weight], "lr": token_lr, "base_lr": token_lr, "weight_decay": args.weight_decay if args.tie_embeddings else 0.0}],
@@ -877,6 +884,7 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
+    log0(f"trick:unet-skip encoder_layers:{base_model.num_encoder_layers} decoder_layers:{base_model.num_decoder_layers} skip_weights:{base_model.num_skip_weights}")
 
     if master_process and args.enable_wandb and args.wandb_mode != "disabled":
         try:
@@ -1234,3 +1242,91 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+====================================================================================================
+Running Python 3.12.0 | packaged by Anaconda, Inc. | (main, Oct  2 2023, 17:29:18) [GCC 11.2.0]
+Running PyTorch 2.8.0+cu128
+Wed May 13 02:25:44 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 570.124.06             Driver Version: 570.124.06     CUDA Version: 12.9     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H100 80GB HBM3          On  |   00000000:84:00.0 Off |                    0 |
+| N/A   34C    P0            122W /  700W |    4842MiB /  81559MiB |      3%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA H100 80GB HBM3          On  |   00000000:8B:00.0 Off |                    0 |
+| N/A   40C    P0            123W /  700W |    1518MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   2  NVIDIA H100 80GB HBM3          On  |   00000000:91:00.0 Off |                    0 |
+| N/A   39C    P0            128W /  700W |    1518MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   3  NVIDIA H100 80GB HBM3          On  |   00000000:E4:00.0 Off |                    0 |
+| N/A   33C    P0            122W /  700W |    1518MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
++-----------------------------------------------------------------------------------------+
+
+====================================================================================================
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:80
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:134226944
+world_size:4 grad_accum_steps:1
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:16 num_kv_heads:8
+tie_embeddings:False embed_lr:0.6 head_lr:0.008 matrix_lr:0.04 scalar_lr:0.04
+train_batch_tokens:524288 train_seq_len:1024 iterations:1000000 warmup_steps:50 max_wallclock_seconds:1200.000
+seed:1337
+trick:unet-skip encoder_layers:9 decoder_layers:9 skip_weights:9
+warmup_step:10/50
+warmup_step:20/50
+warmup_step:30/50
+warmup_step:40/50
+warmup_step:50/50
+step:0/1000000 val_loss:6.9315 val_bpb:4.1052 train_time:0ms step_avg:0.03ms
+step:1/1000000 train_loss:6.9312 train_time:338ms step_avg:338.14ms
+step:2/1000000 train_loss:6.7505 train_time:780ms step_avg:390.13ms
+step:3/1000000 train_loss:5.2070 train_time:1226ms step_avg:408.77ms
+step:4/1000000 train_loss:5.6608 train_time:1670ms step_avg:417.61ms
+step:5/1000000 train_loss:5.3862 train_time:2117ms step_avg:423.32ms
+step:6/1000000 train_loss:5.2807 train_time:2562ms step_avg:427.04ms
+step:7/1000000 train_loss:4.9093 train_time:3009ms step_avg:429.85ms
+step:8/1000000 train_loss:4.8812 train_time:3456ms step_avg:431.96ms
+step:9/1000000 train_loss:4.8109 train_time:3903ms step_avg:433.66ms
+step:10/1000000 train_loss:4.7334 train_time:4349ms step_avg:434.87ms
+step:200/1000000 train_loss:2.6152 train_time:89681ms step_avg:448.41ms
+step:400/1000000 train_loss:2.1503 train_time:179637ms step_avg:449.09ms
+step:600/1000000 train_loss:2.3900 train_time:269638ms step_avg:449.40ms
+step:800/1000000 train_loss:2.2806 train_time:359722ms step_avg:449.65ms
+step:1000/1000000 train_loss:2.2240 train_time:449549ms step_avg:449.55ms
+step:1000/1000000 val_loss:2.2036 val_bpb:1.3051 train_time:449635ms step_avg:449.63ms
+step:1200/1000000 train_loss:2.1782 train_time:539397ms step_avg:449.50ms
+step:1400/1000000 train_loss:2.2730 train_time:629057ms step_avg:449.33ms
+step:1600/1000000 train_loss:2.0278 train_time:718619ms step_avg:449.14ms
+step:1800/1000000 train_loss:2.0610 train_time:808141ms step_avg:448.97ms
+step:2000/1000000 train_loss:2.0872 train_time:897660ms step_avg:448.83ms
+step:2000/1000000 val_loss:2.0666 val_bpb:1.2240 train_time:897746ms step_avg:448.87ms
+step:2200/1000000 train_loss:1.9483 train_time:987166ms step_avg:448.71ms
+step:2400/1000000 train_loss:1.9413 train_time:1076605ms step_avg:448.59ms
+step:2600/1000000 train_loss:2.1077 train_time:1166003ms step_avg:448.46ms
+step:2676/1000000 val_loss:1.9760 val_bpb:1.1703 train_time:1200203ms step_avg:448.51ms
+stopping_early: wallclock_cap train_time:1200203ms step:2676/1000000
+peak memory allocated: 65111 MiB reserved: 65472 MiB
+Serialized model: 534855861 bytes
+Code size: 51102 bytes
+Total submission size: 534906963 bytes
+final val_loss:1.9760 val_bpb:1.1703 eval_time:12830ms
+final_exact val_loss:1.97602103 val_bpb:1.17031096
+Wrote final metrics to /inspire/hdd/global_user/lipengfei-253107010003/my-proj/bags_tricks/Bag-of-tricks-for-Transformers/exp/unet-skip/logs/experiment-20260513-022533/unet-skip-medium-fixed_time_20min/result.json

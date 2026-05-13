@@ -1,6 +1,29 @@
 """
-SwiGLU MLP experiment — replaces GELU MLP with SwiGLU (SiLU-gated MLP, LLaMA/Mistral style).
-Same architecture as baseline except MLP uses gate/up/down projections with F.silu gate.
+Naive architecture GPT with strong training recipe + Sandwich Norm.
+
+Trick: Post-norm after attention and MLP outputs (4 RMSNorms per block).
+Inspired by Gemma4 which uses pre+post norm around both attention and MLP.
+
+
+Architecture is standard (no tricks): GQA, RoPE, RMSNorm (no learnable weight), QK-Norm, Tied Embeddings,
+CastedLinear, restore_low_dim_params_to_fp32.
+
+Training recipe borrows from modded-nanogpt:
+  - Muon optimizer for matrix params, Adam for scalar/embed params with separate LRs
+  - Muon momentum warmup
+  - AdamW weight_decay=0.1 on embeddings + head, no weight decay on Muon/scalar params
+  - JIT warmup with state reset
+
+Removed architectural tricks (vs baseline-sp1024):
+  - U-Net skip connections → standard sequential blocks
+  - ReLU^2 MLP → GELU
+  - Q-Gain → removed
+  - Learnable resid_mix → standard residual x + sublayer(x)
+  - Learnable attn_scale/mlp_scale → standard residual
+  - Logit softcap → raw logits
+  - Input RMSNorm on embedding → removed
+  - Zero-init for output projections → default init
+  - Small embedding init (std=0.005) → default nn.Embedding init
 """
 
 from __future__ import annotations
@@ -24,20 +47,6 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
-
-# -----------------------------
-# functions and classes are defined in the order they are used in the main training loop, for readability
-# -----------------------------
-
-def silu_inplace_(x: torch.Tensor) -> torch.Tensor:
-    """
-    Safe inplace SiLU / Swish.
-    x: input tensor, modified in-place
-    """
-    # 先用临时变量存 sigmoid(x)
-    s = torch.sigmoid(x)   # 注意这里不是 inplace
-    x.mul_(s)              # 最后再 inplace 乘
-    return x
 
 # -----------------------------
 # HYPERPARAMETERS
@@ -587,16 +596,14 @@ class CausalSelfAttention(nn.Module):
 
 
 class MLP(nn.Module):
-    # trick: SwiGLU -- gated SiLU (as in LLaMA/Mistral)
     def __init__(self, dim: int, mlp_mult: int):
         super().__init__()
         hidden = mlp_mult * dim
-        self.gate_proj = CastedLinear(dim, hidden, bias=False)
-        self.up_proj = CastedLinear(dim, hidden, bias=False)
-        self.down_proj = CastedLinear(hidden, dim, bias=False)
+        self.fc = CastedLinear(dim, hidden, bias=False)
+        self.proj = CastedLinear(hidden, dim, bias=False)
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.down_proj(silu_inplace_(self.gate_proj(x)) * self.up_proj(x))
+        return self.proj(F.gelu(self.fc(x)))
 
 
 class Block(nn.Module):
@@ -611,12 +618,16 @@ class Block(nn.Module):
         super().__init__()
         self.attn_norm = RMSNorm()
         self.mlp_norm = RMSNorm()
+        self.post_attn_norm = RMSNorm()
+        self.post_mlp_norm = RMSNorm()
         self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base)
         self.mlp = MLP(dim, mlp_mult)
 
     def forward(self, x: Tensor) -> Tensor:
-        x = x + self.attn(self.attn_norm(x))
-        x = x + self.mlp(self.mlp_norm(x))
+        attn_out = self.post_attn_norm(self.attn(self.attn_norm(x)))
+        x = x + attn_out
+        mlp_out = self.post_mlp_norm(self.mlp(self.mlp_norm(x)))
+        x = x + mlp_out
         return x
 
 
@@ -1234,3 +1245,90 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+====================================================================================================
+Running Python 3.12.0 | packaged by Anaconda, Inc. | (main, Oct  2 2023, 17:29:18) [GCC 11.2.0]
+Running PyTorch 2.8.0+cu128
+Tue May 12 19:02:15 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 570.124.06             Driver Version: 570.124.06     CUDA Version: 12.9     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H100 80GB HBM3          On  |   00000000:84:00.0 Off |                    0 |
+| N/A   34C    P0            122W /  700W |    6505MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA H100 80GB HBM3          On  |   00000000:8B:00.0 Off |                    0 |
+| N/A   40C    P0            121W /  700W |    1518MiB /  81559MiB |      3%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   2  NVIDIA H100 80GB HBM3          On  |   00000000:91:00.0 Off |                    0 |
+| N/A   38C    P0            128W /  700W |    1518MiB /  81559MiB |      3%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   3  NVIDIA H100 80GB HBM3          On  |   00000000:E4:00.0 Off |                    0 |
+| N/A   33C    P0            123W /  700W |    1518MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
++-----------------------------------------------------------------------------------------+
+
+====================================================================================================
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:80
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:134217728
+world_size:4 grad_accum_steps:1
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:16 num_kv_heads:8
+tie_embeddings:False embed_lr:0.6 head_lr:0.008 matrix_lr:0.04 scalar_lr:0.04
+train_batch_tokens:524288 train_seq_len:1024 iterations:1000000 warmup_steps:50 max_wallclock_seconds:1200.000
+seed:1337
+warmup_step:10/50
+warmup_step:20/50
+warmup_step:30/50
+warmup_step:40/50
+warmup_step:50/50
+step:0/1000000 val_loss:6.9315 val_bpb:4.1052 train_time:0ms step_avg:0.02ms
+step:1/1000000 train_loss:6.9312 train_time:345ms step_avg:344.66ms
+step:2/1000000 train_loss:6.9744 train_time:788ms step_avg:393.94ms
+step:3/1000000 train_loss:6.1506 train_time:1233ms step_avg:411.09ms
+step:4/1000000 train_loss:16.3037 train_time:1680ms step_avg:420.12ms
+step:5/1000000 train_loss:7.7854 train_time:2127ms step_avg:425.47ms
+step:6/1000000 train_loss:7.2310 train_time:2575ms step_avg:429.20ms
+step:7/1000000 train_loss:8.0631 train_time:3022ms step_avg:431.78ms
+step:8/1000000 train_loss:9.5661 train_time:3469ms step_avg:433.59ms
+step:9/1000000 train_loss:9.1368 train_time:3915ms step_avg:435.01ms
+step:10/1000000 train_loss:7.4278 train_time:4361ms step_avg:436.10ms
+step:200/1000000 train_loss:2.8654 train_time:90246ms step_avg:451.23ms
+step:400/1000000 train_loss:2.2751 train_time:180818ms step_avg:452.04ms
+step:600/1000000 train_loss:2.4700 train_time:271347ms step_avg:452.25ms
+step:800/1000000 train_loss:2.3404 train_time:361867ms step_avg:452.33ms
+step:1000/1000000 train_loss:2.2761 train_time:452419ms step_avg:452.42ms
+step:1000/1000000 val_loss:2.2587 val_bpb:1.3378 train_time:452506ms step_avg:452.51ms
+step:1200/1000000 train_loss:2.2248 train_time:543010ms step_avg:452.51ms
+step:1400/1000000 train_loss:2.3217 train_time:633612ms step_avg:452.58ms
+step:1600/1000000 train_loss:2.0739 train_time:724084ms step_avg:452.55ms
+step:1800/1000000 train_loss:2.1095 train_time:814501ms step_avg:452.50ms
+step:2000/1000000 train_loss:2.1240 train_time:904858ms step_avg:452.43ms
+step:2000/1000000 val_loss:2.1058 val_bpb:1.2472 train_time:904944ms step_avg:452.47ms
+step:2200/1000000 train_loss:1.9834 train_time:995282ms step_avg:452.40ms
+step:2400/1000000 train_loss:1.9688 train_time:1085630ms step_avg:452.35ms
+step:2600/1000000 train_loss:2.1344 train_time:1175885ms step_avg:452.26ms
+step:2654/1000000 val_loss:2.0061 val_bpb:1.1881 train_time:1200290ms step_avg:452.26ms
+stopping_early: wallclock_cap train_time:1200290ms step:2654/1000000
+peak memory allocated: 69480 MiB reserved: 69870 MiB
+Serialized model: 534820403 bytes
+Code size: 50662 bytes
+Total submission size: 534871065 bytes
+final val_loss:2.0061 val_bpb:1.1881 eval_time:13010ms
+final_exact val_loss:2.00606527 val_bpb:1.18810485
+Wrote final metrics to /inspire/hdd/global_user/lipengfei-253107010003/my-proj/bags_tricks/Bag-of-tricks-for-Transformers/exp/sandwich-norm/logs/experiment-20260512-190203/sandwich-norm-medium-fixed_time_20min/result.json
