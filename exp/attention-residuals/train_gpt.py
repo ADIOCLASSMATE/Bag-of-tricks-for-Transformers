@@ -108,7 +108,7 @@ class Hyperparameters:
     attn_res_num_blocks = int(os.environ.get("ATTN_RES_NUM_BLOCKS", "3"))
 
     # trick: attention-residuals — initial recency bias for current block
-    attn_res_recency_bias_init = float(os.environ.get("ATTN_RES_RECENCY_BIAS_INIT", "0.0"))
+    attnres_recency_bias_init = float(os.environ.get("ATTNRES_RECENCY_BIAS_INIT", "0.0"))
 
     # trick: attention-residuals attn model — "block" attends to block-level summaries, "full" attends to all layers
     attnres_mode = os.environ.get("ATTNRES_MODE", "full")
