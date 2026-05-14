@@ -37,6 +37,21 @@ from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 # -----------------------------
+# functions and classes are defined in the order they are used in the main training loop, for readability
+# -----------------------------
+
+def gelu_tanh_inplace_(x: torch.Tensor) -> torch.Tensor:
+    coeff = 0.7978845608
+    x_cube = x * x * x
+    # 保留 x + 0.044715 * x^3 的计算图
+    x_inner = coeff * (x + 0.044715 * x_cube)
+    x_tanh = x_inner.tanh_()  # 可以原地tanh
+    # 这里不可以直接覆盖 x，先用临时变量
+    x_out = x * 0.5
+    x_out = x_out * (1 + x_tanh)
+    return x_out
+
+# -----------------------------
 # HYPERPARAMETERS
 # -----------------------------
 
@@ -593,7 +608,8 @@ class MLP(nn.Module):
         self.down_proj = CastedLinear(hidden, dim, bias=False)
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.down_proj(F.gelu(self.gate_proj(x)) * self.up_proj(x))
+        return self.down_proj(gelu_tanh_inplace_(self.gate_proj(x)) * self.up_proj(x))
+
 
 class Block(nn.Module):
     def __init__(
@@ -1230,3 +1246,89 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+====================================================================================================
+Running Python 3.12.0 | packaged by Anaconda, Inc. | (main, Oct  2 2023, 17:29:18) [GCC 11.2.0]
+Running PyTorch 2.8.0+cu128
+Thu May 14 04:08:52 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 570.124.06             Driver Version: 570.124.06     CUDA Version: 12.9     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H100 80GB HBM3          On  |   00000000:84:00.0 Off |                    0 |
+| N/A   28C    P0            120W /  700W |    2415MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA H100 80GB HBM3          On  |   00000000:8B:00.0 Off |                    0 |
+| N/A   28C    P0            117W /  700W |    1584MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   2  NVIDIA H100 80GB HBM3          On  |   00000000:91:00.0 Off |                    0 |
+| N/A   27C    P0            122W /  700W |    1584MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   3  NVIDIA H100 80GB HBM3          On  |   00000000:E4:00.0 Off |                    0 |
+| N/A   26C    P0            118W /  700W |    1584MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
++-----------------------------------------------------------------------------------------+
+
+====================================================================================================
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:80
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:171966464
+world_size:4 grad_accum_steps:2
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:16 num_kv_heads:8
+tie_embeddings:False embed_lr:0.6 head_lr:0.008 matrix_lr:0.04 scalar_lr:0.04
+train_batch_tokens:524288 train_seq_len:1024 iterations:1000000 warmup_steps:50 max_wallclock_seconds:1200.000
+seed:1337
+warmup_step:10/50
+warmup_step:20/50
+warmup_step:30/50
+warmup_step:40/50
+warmup_step:50/50
+step:0/1000000 val_loss:6.9313 val_bpb:4.1051 train_time:0ms step_avg:0.02ms
+step:1/1000000 train_loss:6.9313 train_time:431ms step_avg:431.09ms
+step:2/1000000 train_loss:6.8857 train_time:908ms step_avg:453.96ms
+step:3/1000000 train_loss:5.2161 train_time:1386ms step_avg:462.05ms
+step:4/1000000 train_loss:5.4365 train_time:1864ms step_avg:466.06ms
+step:5/1000000 train_loss:5.1802 train_time:2342ms step_avg:468.32ms
+step:6/1000000 train_loss:5.1592 train_time:2818ms step_avg:469.73ms
+step:7/1000000 train_loss:4.9503 train_time:3297ms step_avg:470.98ms
+step:8/1000000 train_loss:4.8147 train_time:3775ms step_avg:471.90ms
+step:9/1000000 train_loss:4.7351 train_time:4253ms step_avg:472.54ms
+step:10/1000000 train_loss:4.6560 train_time:4732ms step_avg:473.23ms
+step:200/1000000 train_loss:2.5477 train_time:95945ms step_avg:479.73ms
+step:400/1000000 train_loss:2.1451 train_time:192252ms step_avg:480.63ms
+step:600/1000000 train_loss:2.3508 train_time:288654ms step_avg:481.09ms
+step:800/1000000 train_loss:2.1604 train_time:384488ms step_avg:480.61ms
+step:1000/1000000 train_loss:2.2321 train_time:479956ms step_avg:479.96ms
+step:1000/1000000 val_loss:2.1800 val_bpb:1.2911 train_time:479996ms step_avg:480.00ms
+step:1200/1000000 train_loss:2.2022 train_time:575591ms step_avg:479.66ms
+step:1400/1000000 train_loss:2.2064 train_time:671107ms step_avg:479.36ms
+step:1600/1000000 train_loss:1.9940 train_time:766292ms step_avg:478.93ms
+step:1800/1000000 train_loss:2.0774 train_time:861432ms step_avg:478.57ms
+step:2000/1000000 train_loss:2.0265 train_time:956751ms step_avg:478.38ms
+step:2000/1000000 val_loss:2.0279 val_bpb:1.2011 train_time:956791ms step_avg:478.40ms
+step:2200/1000000 train_loss:1.9538 train_time:1052141ms step_avg:478.25ms
+step:2400/1000000 train_loss:1.9728 train_time:1147280ms step_avg:478.03ms
+step:2511/1000000 val_loss:1.9592 val_bpb:1.1603 train_time:1200092ms step_avg:477.93ms
+stopping_early: wallclock_cap train_time:1200092ms step:2511/1000000
+peak memory allocated: 40232 MiB reserved: 40548 MiB
+Serialized model: 685820759 bytes
+Code size: 50756 bytes
+Total submission size: 685871515 bytes
+final val_loss:1.9592 val_bpb:1.1603 eval_time:15304ms
+final_exact val_loss:1.95919332 val_bpb:1.16034464
+Wrote final metrics to /inspire/hdd/global_user/lipengfei-253107010003/my-proj/bags_tricks/Bag-of-tricks-for-Transformers/exp/geglu/logs/experiment-20260514-040657/geglu-medium-fixed_time_20min/result.json

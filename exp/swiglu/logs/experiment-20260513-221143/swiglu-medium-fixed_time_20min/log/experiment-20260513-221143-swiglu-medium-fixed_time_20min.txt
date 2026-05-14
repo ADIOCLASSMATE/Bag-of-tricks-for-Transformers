@@ -1,17 +1,6 @@
 """
-Naive architecture GPT with strong training recipe + GeGLU MLP.
-
-Trick: GeGLU -- gated GELU with tanh approximation (as in Gemma4).
-Replaces the standard proj(gelu(fc(x))) MLP with down_proj(gelu_tanh(gate_proj(x)) * up_proj(x)).
-
-Architecture is otherwise standard: GQA, RoPE, RMSNorm (no learnable weight), QK-Norm, Tied Embeddings,
-CastedLinear, restore_low_dim_params_to_fp32.
-
-Training recipe borrows from modded-nanogpt:
-  - Muon optimizer for matrix params, Adam for scalar/embed params with separate LRs
-  - Muon momentum warmup
-  - AdamW weight_decay=0.1 on embeddings + head, no weight decay on Muon/scalar params
-  - JIT warmup with state reset
+SwiGLU MLP experiment — replaces GELU MLP with SwiGLU (SiLU-gated MLP, LLaMA/Mistral style).
+Same architecture as baseline except MLP uses gate/up/down projections with F.silu gate.
 """
 
 from __future__ import annotations
@@ -35,6 +24,20 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
+
+# -----------------------------
+# functions and classes are defined in the order they are used in the main training loop, for readability
+# -----------------------------
+
+def silu_inplace_(x: torch.Tensor) -> torch.Tensor:
+    """
+    Safe inplace SiLU / Swish.
+    x: input tensor, modified in-place
+    """
+    # 先用临时变量存 sigmoid(x)
+    s = torch.sigmoid(x)   # 注意这里不是 inplace
+    x.mul_(s)              # 最后再 inplace 乘
+    return x
 
 # -----------------------------
 # HYPERPARAMETERS
@@ -584,7 +587,7 @@ class CausalSelfAttention(nn.Module):
 
 
 class MLP(nn.Module):
-    # trick: GeGLU -- gated GELU with tanh approximation (as in Gemma4)
+    # trick: SwiGLU -- gated SiLU (as in LLaMA/Mistral)
     def __init__(self, dim: int, mlp_mult: int):
         super().__init__()
         hidden = mlp_mult * dim
@@ -593,7 +596,8 @@ class MLP(nn.Module):
         self.down_proj = CastedLinear(hidden, dim, bias=False)
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.down_proj(F.gelu(self.gate_proj(x)) * self.up_proj(x))
+        return self.down_proj(silu_inplace_(self.gate_proj(x)) * self.up_proj(x))
+
 
 class Block(nn.Module):
     def __init__(
@@ -1230,3 +1234,89 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+====================================================================================================
+Running Python 3.12.0 | packaged by Anaconda, Inc. | (main, Oct  2 2023, 17:29:18) [GCC 11.2.0]
+Running PyTorch 2.8.0+cu128
+Wed May 13 22:11:55 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 570.124.06             Driver Version: 570.124.06     CUDA Version: 12.9     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H100 80GB HBM3          On  |   00000000:84:00.0 Off |                    0 |
+| N/A   33C    P0            122W /  700W |    2415MiB /  81559MiB |      5%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA H100 80GB HBM3          On  |   00000000:8B:00.0 Off |                    0 |
+| N/A   39C    P0            120W /  700W |    1584MiB /  81559MiB |      5%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   2  NVIDIA H100 80GB HBM3          On  |   00000000:91:00.0 Off |                    0 |
+| N/A   37C    P0            127W /  700W |    1584MiB /  81559MiB |      2%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   3  NVIDIA H100 80GB HBM3          On  |   00000000:E4:00.0 Off |                    0 |
+| N/A   33C    P0            123W /  700W |    1584MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
++-----------------------------------------------------------------------------------------+
+
+====================================================================================================
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:80
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:171966464
+world_size:4 grad_accum_steps:2
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:16 num_kv_heads:8
+tie_embeddings:False embed_lr:0.6 head_lr:0.008 matrix_lr:0.04 scalar_lr:0.04
+train_batch_tokens:524288 train_seq_len:1024 iterations:1000000 warmup_steps:50 max_wallclock_seconds:1200.000
+seed:1337
+warmup_step:10/50
+warmup_step:20/50
+warmup_step:30/50
+warmup_step:40/50
+warmup_step:50/50
+step:0/1000000 val_loss:6.9317 val_bpb:4.1054 train_time:0ms step_avg:0.02ms
+step:1/1000000 train_loss:6.9318 train_time:423ms step_avg:422.61ms
+step:2/1000000 train_loss:6.8772 train_time:896ms step_avg:447.92ms
+step:3/1000000 train_loss:5.2211 train_time:1371ms step_avg:456.85ms
+step:4/1000000 train_loss:5.4187 train_time:1845ms step_avg:461.30ms
+step:5/1000000 train_loss:5.1736 train_time:2321ms step_avg:464.11ms
+step:6/1000000 train_loss:5.1204 train_time:2797ms step_avg:466.11ms
+step:7/1000000 train_loss:4.9138 train_time:3273ms step_avg:467.64ms
+step:8/1000000 train_loss:4.7725 train_time:3748ms step_avg:468.54ms
+step:9/1000000 train_loss:4.6997 train_time:4225ms step_avg:469.49ms
+step:10/1000000 train_loss:4.6260 train_time:4702ms step_avg:470.15ms
+step:200/1000000 train_loss:2.5425 train_time:95459ms step_avg:477.30ms
+step:400/1000000 train_loss:2.1364 train_time:191428ms step_avg:478.57ms
+step:600/1000000 train_loss:2.3524 train_time:287270ms step_avg:478.78ms
+step:800/1000000 train_loss:2.1603 train_time:383019ms step_avg:478.77ms
+step:1000/1000000 train_loss:2.2297 train_time:478688ms step_avg:478.69ms
+step:1000/1000000 val_loss:2.1760 val_bpb:1.2888 train_time:478728ms step_avg:478.73ms
+step:1200/1000000 train_loss:2.1976 train_time:574659ms step_avg:478.88ms
+step:1400/1000000 train_loss:2.2019 train_time:670767ms step_avg:479.12ms
+step:1600/1000000 train_loss:1.9863 train_time:766476ms step_avg:479.05ms
+step:1800/1000000 train_loss:2.0694 train_time:862175ms step_avg:478.99ms
+step:2000/1000000 train_loss:2.0190 train_time:958143ms step_avg:479.07ms
+step:2000/1000000 val_loss:2.0240 val_bpb:1.1987 train_time:958183ms step_avg:479.09ms
+step:2200/1000000 train_loss:1.9485 train_time:1054026ms step_avg:479.10ms
+step:2400/1000000 train_loss:1.9704 train_time:1149693ms step_avg:479.04ms
+step:2505/1000000 val_loss:1.9552 val_bpb:1.1580 train_time:1200071ms step_avg:479.07ms
+stopping_early: wallclock_cap train_time:1200071ms step:2505/1000000
+peak memory allocated: 39976 MiB reserved: 40362 MiB
+Serialized model: 685820759 bytes
+Code size: 50188 bytes
+Total submission size: 685870947 bytes
+final val_loss:1.9552 val_bpb:1.1580 eval_time:15415ms
+final_exact val_loss:1.95524046 val_bpb:1.15800354
+Wrote final metrics to /inspire/hdd/global_user/lipengfei-253107010003/my-proj/bags_tricks/Bag-of-tricks-for-Transformers/exp/swiglu/logs/experiment-20260513-221143/swiglu-medium-fixed_time_20min/result.json
