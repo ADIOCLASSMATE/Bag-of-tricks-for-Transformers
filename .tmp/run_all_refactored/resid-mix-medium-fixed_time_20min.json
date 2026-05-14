@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "trainer_path": "exp/untie-embed/train_gpt.py",
+  "trainer_path": "exp/resid-mix/train_gpt_refactor.py",
   "launcher": {
     "nproc_per_node": 4,
     "master_port_base": 29500
@@ -14,42 +14,35 @@
     "warmup_steps": 50,
     "warmdown_iters": 800,
     "enable_wandb": 1,
-    "wandb_mode": "offline",
+    "wandb_mode": "online",
     "wandb_project": "bag-of-tricks-for-transformers",
+    "wandb_entity": "Bag-of-Tricks",
+    "wandb_group": "medium-ablation",
     "num_layers": 18,
     "model_dim": 1024,
     "num_heads": 16,
     "num_kv_heads": 8,
     "mlp_mult": 2,
-    "tie_embeddings": 0,
+    "tied_embed_lr": 0.05,
     "embed_lr": 0.6,
     "head_lr": 0.008,
-    "tied_embed_lr": 0.05,
     "matrix_lr": 0.04,
     "scalar_lr": 0.04,
     "muon_momentum": 0.95,
     "muon_backend_steps": 5,
     "muon_momentum_warmup_start": 0.85,
     "muon_momentum_warmup_steps": 800,
-    "grad_clip_norm": 0.0,
-    "wandb_entity": "Bag-of-Tricks",
-    "wandb_group": "medium-ablation"
+    "grad_clip_norm": 0.0
   },
   "experiments": [
     {
-      "name": "untie-embed-medium-fixed_time_20min",
+      "name": "resid-mix-medium-fixed_time_20min",
+      "trainer_path": "exp/resid-mix/train_gpt_refactor.py",
       "control": {
-        "mode": "fixed_compute",
-        "target_wallclock_seconds": 1200,
-        "iterations_cap": 1000000
-      }
-    },
-    {
-      "name": "untie-embed-medium-fixed_tokens_10b",
-      "control": {
-        "mode": "fixed_tokens",
-        "target_train_tokens": 10000000000
-      }
+  "mode": "fixed_compute",
+  "target_wallclock_seconds": 1200,
+  "iterations_cap": 1000000
+}
     }
   ]
 }
