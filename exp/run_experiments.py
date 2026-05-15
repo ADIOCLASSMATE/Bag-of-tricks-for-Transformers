@@ -40,7 +40,8 @@ ENV_KEY_MAP = {
     # trick: attention-residuals
     "attn_res_enabled": "ATTN_RES_ENABLED",
     "attn_res_num_blocks": "ATTN_RES_NUM_BLOCKS",
-    "attn_res_recency_bias_init": "ATTN_RES_RECENCY_BIAS_INIT",
+    "attnres_recency_bias_init": "ATTNRES_RECENCY_BIAS_INIT",
+    "attnres_mode": "ATTNRES_MODE",
     "logit_softcap": "LOGIT_SOFTCAP",
     "embed_lr": "EMBED_LR",
     "head_lr": "HEAD_LR",

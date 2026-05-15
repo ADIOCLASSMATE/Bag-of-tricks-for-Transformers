@@ -593,8 +593,7 @@ class MLP(nn.Module):
         self.down_proj = CastedLinear(hidden, dim, bias=False)
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.down_proj(F.gelu(self.gate_proj(x), approximate='tanh') * self.up_proj(x))
-
+        return self.down_proj(F.gelu(self.gate_proj(x)) * self.up_proj(x))
 
 class Block(nn.Module):
     def __init__(

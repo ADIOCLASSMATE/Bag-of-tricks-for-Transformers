@@ -26,6 +26,20 @@ from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 # -----------------------------
+# functions and classes are defined in the order they are used in the main training loop, for readability
+# -----------------------------
+
+def silu_inplace_(x: torch.Tensor) -> torch.Tensor:
+    """
+    Safe inplace SiLU / Swish.
+    x: input tensor, modified in-place
+    """
+    # 先用临时变量存 sigmoid(x)
+    s = torch.sigmoid(x)   # 注意这里不是 inplace
+    x.mul_(s)              # 最后再 inplace 乘
+    return x
+
+# -----------------------------
 # HYPERPARAMETERS
 # -----------------------------
 
@@ -582,7 +596,7 @@ class MLP(nn.Module):
         self.down_proj = CastedLinear(hidden, dim, bias=False)
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
+        return self.down_proj(silu_inplace_(self.gate_proj(x)) * self.up_proj(x))
 
 
 class Block(nn.Module):

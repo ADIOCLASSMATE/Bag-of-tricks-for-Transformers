@@ -108,7 +108,10 @@ class Hyperparameters:
     attn_res_num_blocks = int(os.environ.get("ATTN_RES_NUM_BLOCKS", "3"))
 
     # trick: attention-residuals — initial recency bias for current block
-    attn_res_recency_bias_init = float(os.environ.get("ATTN_RES_RECENCY_BIAS_INIT", "10.0"))
+    attnres_recency_bias_init = float(os.environ.get("ATTNRES_RECENCY_BIAS_INIT", "0.0"))
+
+    # trick: attention-residuals attn model — "block" attends to block-level summaries, "full" attends to all layers
+    attnres_mode = os.environ.get("ATTNRES_MODE", "full")
 
     # Optional W&B logging
     enable_wandb = bool(int(os.environ.get("ENABLE_WANDB", "1")))
@@ -141,7 +144,7 @@ CONTROL_TENSOR_NAME_PATTERNS = tuple(
     pattern
     for pattern in os.environ.get(
         "CONTROL_TENSOR_NAME_PATTERNS",
-        "attn_res_bias,mlp_res_bias,attn_res_proj,mlp_res_proj",
+        "",
     ).split(",")
     if pattern
 )
@@ -662,8 +665,10 @@ class Block(nn.Module):
         rope_base: float,
         layer_idx: int | None = None,  # trick: attention-residuals
         layers_per_block: int | None = None,  # trick: attention-residuals
-        attn_res_enabled: bool = False,  # trick: attention-residuals
-        attn_res_recency_bias_init: float = 10.0,  # trick: attention-residuals
+        attn_res_enabled: bool = True,  # trick: attention-residuals
+        attnres_gate_type: str = "bias",  # trick: attention-residuals
+        attnres_recency_bias_init: float = 0.0,  # trick: attention-residuals
+        attnres_mode: str = "full",  # trick: attention-residuals
     ):
         super().__init__()
         self.attn_norm = RMSNorm()
@@ -675,52 +680,97 @@ class Block(nn.Module):
         self.layer_idx = layer_idx
         self.layers_per_block = layers_per_block
         self.attn_res_enabled = attn_res_enabled
-
-        # trick: attention-residuals — create attention residual components when enabled
-        if attn_res_enabled:
-            self.attn_res_proj = CastedLinear(dim, 1, bias=False)
-            self.attn_res_norm = RMSNorm()
-            self.mlp_res_proj = CastedLinear(dim, 1, bias=False)
-            self.mlp_res_norm = RMSNorm()
-            self.attn_res_bias = nn.Parameter(torch.tensor(attn_res_recency_bias_init))
-            self.mlp_res_bias = nn.Parameter(torch.tensor(attn_res_recency_bias_init))
+        self.gate_type = attnres_gate_type
+        self.attnres_mode = attnres_mode
+        self.attnres_recency_bias_init = attnres_recency_bias_init
+        self.attn_res_proj = CastedLinear(dim, 1, bias=False)
+        self.attn_res_norm = RMSNorm()
+        self.mlp_res_proj = CastedLinear(dim, 1, bias=False)
+        self.mlp_res_norm = RMSNorm()
+        # trick: attention-residuals — always create bias params (reference always creates them)
+        if self.gate_type == "bias":
+            self.attn_res_bias = nn.Parameter(torch.tensor(attnres_recency_bias_init))
+            self.mlp_res_bias = nn.Parameter(torch.tensor(attnres_recency_bias_init))
+        else:
+            self.attn_res_bias = nn.Parameter(torch.tensor(0.0))
+            self.mlp_res_bias = nn.Parameter(torch.tensor(0.0))
 
     @property
     def is_block_boundary(self) -> bool:
         """True when this layer is the last in its block."""
-        # trick: attention-residuals
-        if not self.attn_res_enabled or self.layers_per_block is None:
-            return False
         return (self.layer_idx + 1) % self.layers_per_block == 0
 
-    def forward(self, x: Tensor, blocks: list[Tensor] | None = None, partial_block: Tensor | None = None) -> tuple:
+    @property
+    def is_new_block_start(self) -> bool:
+        """True when this is the first layer of a new block (not block 0)."""
+        return self.layer_idx > 0 and self.layer_idx % self.layers_per_block == 0
+
+    def _apply_gate(self, hidden_states, h_attn, sublayer: str):
+        """only support bias now"""
+        #TODO support other gate types
+        """Apply gating between residual stream and AttnRes output."""
+        if self.gate_type == "sigmoid_scalar":
+            logit = self.attn_res_gate_logit if sublayer == "attn" else self.mlp_res_gate_logit
+            gate = torch.sigmoid(logit)
+            return (1 - gate) * hidden_states + gate * h_attn
+        elif self.gate_type == "sigmoid_vector":
+            gate_proj = self.attn_res_gate_proj if sublayer == "attn" else self.mlp_res_gate_proj
+            gate = torch.sigmoid(gate_proj(hidden_states))  # (B, T, D)
+            return (1 - gate) * hidden_states + gate * h_attn
+        elif self.gate_type == "learnable_alpha":
+            alpha = self.attn_res_alpha if sublayer == "attn" else self.mlp_res_alpha
+            return (1 - alpha) * hidden_states + alpha * h_attn
+        else:
+            # "bias" mode: no gate, AttnRes output used directly
+            return h_attn
+
+    def forward(self, blocks: list[Tensor] | None = None, partial_block: Tensor | None = None) -> tuple:
         # trick: attention-residuals — branch on whether attention residuals are enabled
         if self.attn_res_enabled and blocks is not None:
-            # Attention residuals path
-            # Attend over block history before attention sublayer
-            h_attn = block_attn_res(blocks, partial_block, self.attn_res_proj, self.attn_res_norm, self.attn_res_bias)
-            x = h_attn + self.attn(self.attn_norm(h_attn))
+            if self.attnres_mode == "block":
+                # ---- Block mode ----
+                # Attend over block history before attention sublayer
+                h_attn = block_attn_res(blocks, partial_block, self.attn_res_proj, self.attn_res_norm, self.attn_res_bias)
+                h = self._apply_gate(partial_block, h_attn, sublayer="attn")
 
-            # Attend over block history before MLP sublayer
-            h_mlp = block_attn_res(blocks, x, self.mlp_res_proj, self.mlp_res_norm, self.mlp_res_bias)
-            x = h_mlp + self.mlp(self.mlp_norm(h_mlp))
+                # New block boundary: store old partial, reset
+                if self.is_new_block_start:
+                    blocks = blocks + [partial_block]
+                    partial_block = torch.zeros_like(partial_block)
 
-            # Update partial_block accumulator
-            partial_block = x
+                attn_out = self.attn(self.attn_norm(h))
+                partial_block = partial_block + attn_out
 
-            # trick: attention-residuals — at block boundaries, record state (no detach to allow gradient flow)
-            if self.is_block_boundary:
-                blocks = blocks + [x]
-                partial_block = x  # Reset partial block for next block
+                # Attend over block history before MLP sublayer
+                h_mlp = block_attn_res(blocks, partial_block, self.mlp_res_proj, self.mlp_res_norm, self.mlp_res_bias)
+                h = self._apply_gate(partial_block, h_mlp, sublayer="mlp")
+                mlp_out = self.mlp(self.mlp_norm(h))
+                partial_block = partial_block + mlp_out
 
-            return x, blocks, partial_block
+                return blocks, partial_block
+
+            else:  # full mode
+                # ---- Full mode ----
+                # Attend over block history before attention sublayer
+                h_attn = block_attn_res(blocks, partial_block, self.attn_res_proj, self.attn_res_norm, self.attn_res_bias)
+                h = self._apply_gate(partial_block, h_attn, sublayer="attn")
+                attn_out = self.attn(self.attn_norm(h))
+                partial_block = partial_block + attn_out
+                blocks = blocks + [partial_block]
+
+                # Attend over block history before MLP sublayer
+                h_mlp = block_attn_res(blocks, partial_block, self.mlp_res_proj, self.mlp_res_norm, self.mlp_res_bias)
+                h = self._apply_gate(partial_block, h_mlp, sublayer="mlp")
+                mlp_out = self.mlp(self.mlp_norm(h))
+                partial_block = partial_block + mlp_out
+                blocks = blocks + [partial_block]
+
+                return blocks, partial_block
         else:
             # Standard residual path (backward compatibility)
-            x = x + self.attn(self.attn_norm(x))
-            x = x + self.mlp(self.mlp_norm(x))
-            return x, blocks, partial_block
-
-
+            partial_block = partial_block + self.attn(self.attn_norm(partial_block))
+            partial_block = partial_block + self.mlp(self.mlp_norm(partial_block))
+            return partial_block
 
 class GPT(nn.Module):
     def __init__(
@@ -734,12 +784,14 @@ class GPT(nn.Module):
         tie_embeddings: bool,
         rope_base: float,
         attn_res_enabled: bool = False,  # trick: attention-residuals
+        attnres_mode: str = "full",  # trick: attention-residuals ["full", "block"]
         attn_res_num_blocks: int = 3,  # trick: attention-residuals
-        attn_res_recency_bias_init: float = 10.0,  # trick: attention-residuals
+        attnres_recency_bias_init: float = 0.0,  # trick: attention-residuals
     ):
         super().__init__()
         self.tie_embeddings = tie_embeddings
         self.attn_res_enabled = attn_res_enabled  # trick: attention-residuals
+        self.attnres_mode = attnres_mode  # trick: attention-residuals
 
         # trick: attention-residuals — calculate layers per block
         if attn_res_enabled:
@@ -759,21 +811,29 @@ class GPT(nn.Module):
                     layer_idx=i,  # trick: attention-residuals
                     layers_per_block=self.layers_per_block,  # trick: attention-residuals
                     attn_res_enabled=attn_res_enabled,  # trick: attention-residuals
-                    attn_res_recency_bias_init=attn_res_recency_bias_init,  # trick: attention-residuals
+                    attnres_mode=attnres_mode,  # trick: attention-residuals
+                    attnres_recency_bias_init=attnres_recency_bias_init,  # trick: attention-residuals
                 )
                 for i in range(num_layers)
             ]
         )
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)
+        if self.attn_res_enabled and self.attnres_mode == "block":
+            self.final_res_proj = CastedLinear(model_dim, 1, bias=False)
+            self.final_res_norm = RMSNorm()
+            bias_init = attnres_recency_bias_init
+            self.final_res_bias = nn.Parameter(torch.tensor(bias_init))
+
         self._init_weights()
 
     
     def _init_weights(self):
         for name, module in self.named_modules():
             if isinstance(module, nn.Linear):
-                if name.endswith('.proj'):
+                if name.endswith('.proj') and not name.endswith('res_proj'):
                     # Output projections (attn.proj, mlp.proj): zero init
+                    # Exclude attn_res_proj, mlp_res_proj, final_res_proj — reference uses Normal(0, 0.02)
                     nn.init.zeros_(module.weight)
                 elif name == 'lm_head':
                     # LM head: small normal
@@ -790,29 +850,33 @@ class GPT(nn.Module):
                 nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, input_ids: Tensor, target_ids: Tensor) -> Tensor:
-        x = self.tok_emb(input_ids)
+        input_embeds = self.tok_emb(input_ids)
 
         # trick: attention-residuals — branch on whether attention residuals are enabled
         if self.attn_res_enabled:
             # trick: attention-residuals — initialize blocks list with embedding as block 0 (no detach)
-            blocks = [x]
-            partial_block = x
+            blocks = [input_embeds]
+            partial_block = input_embeds
 
             for block in self.blocks:
-                x, blocks, partial_block = block(x, blocks, partial_block)
+                blocks, partial_block = block(blocks, partial_block)
+
         else:
             # Standard sequential path (backward compatibility)
             for block in self.blocks:
-                x, _, _ = block(x)
+                partial_block = block(blocks, partial_block)
+        if self.attn_res_enabled and self.attnres_mode == "block":
+            partial_block = block_attn_res(blocks, partial_block, 
+                                           self.final_res_proj, self.final_res_norm, self.final_res_bias)
 
-        x = self.final_norm(x).reshape(-1, x.size(-1))
+        partial_block = self.final_norm(partial_block).reshape(-1, partial_block.size(-1))
         targets = target_ids.reshape(-1)
         if self.tie_embeddings:
-            logits = F.linear(x, self.tok_emb.weight)
+            logits = F.linear(partial_block, self.tok_emb.weight)
         else:
             if self.lm_head is None:
                 raise RuntimeError("lm_head is required when tie_embeddings=False")
-            logits = self.lm_head(x)
+            logits = self.lm_head(partial_block)
         return F.cross_entropy(logits.float(), targets, reduction="mean")
 
 
@@ -936,7 +1000,8 @@ def main() -> None:
         rope_base=args.rope_base,
         attn_res_enabled=args.attn_res_enabled,  # trick: attention-residuals
         attn_res_num_blocks=args.attn_res_num_blocks,  # trick: attention-residuals
-        attn_res_recency_bias_init=args.attn_res_recency_bias_init,  # trick: attention-residuals
+        attnres_recency_bias_init=args.attnres_recency_bias_init,  # trick: attention-residuals
+        attnres_mode=args.attnres_mode,  # trick: attention-residuals
     ).to(device).bfloat16()
     for module in base_model.modules():
         if isinstance(module, CastedLinear):
@@ -951,6 +1016,9 @@ def main() -> None:
     # - matrix params in transformer blocks use MATRIX_LR via Muon
     # - vectors/scalars use SCALAR_LR via Adam
     block_named_params = list(base_model.blocks.named_parameters())
+    if base_model.attn_res_enabled and base_model.attnres_mode == "block":
+        block_named_params += list(base_model.final_res_proj.named_parameters(prefix="final_res_proj"))
+        block_named_params += [("final_res_bias", base_model.final_res_bias)]
     matrix_params = [
         p
         for name, p in block_named_params
@@ -1013,7 +1081,7 @@ def main() -> None:
 
     if args.attn_res_enabled:
         # trick: attention-residuals
-        log0(f"Attention Residuals: enabled, num_blocks={args.attn_res_num_blocks}, layers_per_block={base_model.layers_per_block}, recency_bias_init={args.attn_res_recency_bias_init}")
+        log0(f"Attention Residuals: enabled, num_blocks={args.attn_res_num_blocks}, layers_per_block={base_model.layers_per_block}, recency_bias_init={args.attnres_recency_bias_init}")
 
     if master_process and args.enable_wandb and args.wandb_mode != "disabled":
         try:
