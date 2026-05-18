@@ -4,7 +4,7 @@
 
 This experiment adds a learned **per-head sigmoid gate** on the attention output before heads are merged back into the model dimension. Unlike a static per-head rescale, the gate is **computed from the current token activations**, so each token can suppress or amplify heads differently.
 
-Concretely, each attention module uses a small linear map from the first 12 channels of the input activation to `num_heads` gate logits. The gate is `2 * sigmoid(logits)`, so zero-initialized gate weights start at scale 1.0 and preserve the baseline attention scale while still allowing each head to be suppressed or amplified. The gate is applied after scaled dot-product attention and before the head outputs are reshaped and projected. This matches the slowrun implementation more closely than a static learned scalar per head.
+Concretely, each attention module uses a small linear map from the first 12 channels of the input activation to `num_heads` gate logits. The gate is `sigmoid(logits)`, so zero-initialized gate weights start at scale 0.5 and let the model learn context-dependent head suppression. The gate is applied after scaled dot-product attention and before the head outputs are reshaped and projected. This matches the slowrun implementation more closely than a static learned scalar per head.
 
 ### Origin
 

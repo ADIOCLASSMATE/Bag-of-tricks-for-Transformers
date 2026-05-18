@@ -14,7 +14,7 @@ y = attention(q, k, v) * gate
 The extremely low-dimensional input (12/512 = 2.3%) forces the gate to be sparse
 and context-selective, rather than learning trivial per-head scale factors.
 
-Gate weights are zero-initialized so the trick starts as an identity function.
+Gate weights are zero-initialized, so the initial gate value is `sigmoid(0) = 0.5`.
 
 ## Single-axis experiment (the 2 runs)
 

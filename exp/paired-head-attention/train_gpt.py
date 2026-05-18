@@ -551,6 +551,8 @@ class CausalSelfAttention(nn.Module):
             raise ValueError("num_heads must be divisible by num_kv_heads")
         if use_paired_head and num_heads % 2 != 0:
             raise ValueError("num_heads must be even for paired-head attention")
+        if use_paired_head and num_kv_heads % 2 != 0:
+            raise ValueError("num_kv_heads must be even for paired-head attention")
         self.num_heads = num_heads
         self.num_kv_heads = num_kv_heads
         self.use_paired_head = use_paired_head
