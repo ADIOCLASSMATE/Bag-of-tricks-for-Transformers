@@ -1276,15 +1276,6 @@ def main() -> None:
             weight_decay=0.0,
             fused=True,
         )
-optimizer_muon, optimizer_scalar]
-    if engram_embedding_params:
-        optimizer_engram = torch.optim.AdamW(
-            [{"params": engram_embedding_params, "lr": args.engram_embed_lr, "base_lr": args.engram_embed_lr}],
-            betas=(args.beta1, args.beta2),
-            eps=args.adam_eps,
-            weight_decay=0.0,
-            fused=True,
-        )
         optimizers.append(optimizer_engram)
     if conv_weights:
         optimizer_conv = torch.optim.AdamW(

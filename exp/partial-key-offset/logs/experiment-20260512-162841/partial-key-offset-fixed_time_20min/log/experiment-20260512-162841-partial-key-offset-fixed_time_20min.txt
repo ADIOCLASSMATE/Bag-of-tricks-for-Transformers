@@ -1,19 +1,17 @@
 """
-Naive architecture GPT with strong training recipe + engram memory branches with tokenizer compression.
+GPT with Partial Key Offset trick.
 
-Architecture is standard (no tricks) plus engram: GQA, RoPE, RMSNorm (no learnable weight), QK-Norm, Tied Embeddings,
-CastedLinear, restore_low_dim_params_to_fp32.
+trick: partial-key-offset — shift stationary key dimensions forward by 1 position,
+enabling single-layer induction head formation.
 
-Engram trick (with tokenizer compression): n-gram memory branches inserted at specific transformer layers. Each EngramBranch
-hashes input token n-grams into a multi-head embedding table, gates the retrieved values against the hidden state, and adds
-the result as a residual. Includes short-convolution mixing. Tokenizer compression maps the original token vocabulary to a
-smaller set by normalizing and deduplicating token strings, reducing the hash vocabulary size for engram lookups.
+trick: partial-key-offset dependency — Half-Truncated RoPE: only rotate first
+head_dim//4 dims, leaving the rest stationary. Required so that key offset can
+target only the stationary dims.
 
-Training recipe borrows from modded-nanogpt:
-  - Muon optimizer for matrix params, Adam for scalar/embed params with separate LRs
-  - Muon momentum warmup
-  - AdamW weight_decay=0.1 on embeddings + head, no weight decay on Muon/scalar params
-  - JIT warmup with state reset
+Official implementation from modded-nanogpt 2025-12-14_PartialKeyOffset.
+
+Baseline architecture: GQA, RoPE, RMSNorm, QK-Norm, Tied Embeddings,
+CastedLinear, GELU MLP, Muon+Adam optimizer.
 """
 
 from __future__ import annotations
@@ -24,11 +22,9 @@ import json
 import math
 import os
 import random
-import re
 import subprocess
 import sys
 import time
-import unicodedata
 import uuid
 from pathlib import Path
 
@@ -81,26 +77,6 @@ class Hyperparameters:
     tie_embeddings = bool(int(os.environ.get("TIE_EMBEDDINGS", "0")))
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
 
-    # Engram hyperparameters
-    engram_enabled = bool(int(os.environ.get("ENGRAM_ENABLED", "1")))
-    engram_layer_ids = os.environ.get("ENGRAM_LAYER_IDS", "0.125,0.5,1.0")
-    engram_max_ngram = int(os.environ.get("ENGRAM_MAX_NGRAM", 3))
-    engram_heads_per_ngram = int(os.environ.get("ENGRAM_HEADS_PER_NGRAM", 4))
-    engram_embed_per_ngram = int(
-        os.environ.get("ENGRAM_EMBED_PER_NGRAM", os.environ.get("ENGRAM_EMBED_DIM", 128))
-    )
-    engram_vocab_multiplier = int(os.environ.get("ENGRAM_VOCAB_MULTIPLIER", 8))
-    engram_vocab_sizes = os.environ.get("ENGRAM_VOCAB_SIZES", "")
-    engram_kernel_size = int(os.environ.get("ENGRAM_KERNEL_SIZE", 4))
-    engram_pad_id = int(os.environ.get("ENGRAM_PAD_ID", 0))
-    # trick: engram-compressed — tokenizer compression enabled by default
-    engram_use_tokenizer_compression = bool(
-        int(os.environ.get("ENGRAM_USE_TOKENIZER_COMPRESSION", "1"))
-    )
-    engram_warmup_steps = int(os.environ.get("ENGRAM_WARMUP_STEPS", "0"))
-    engram_soft_constraint_steps = int(os.environ.get("ENGRAM_SOFT_CONSTRAINT_STEPS", "0"))
-    engram_soft_constraint_min = float(os.environ.get("ENGRAM_SOFT_CONSTRAINT_MIN", "0.1"))
-
     # Optimizer hyperparameters (Muon + Adam, from modded-nanogpt)
     embed_lr = float(os.environ.get("EMBED_LR", 0.6))
     head_lr = float(os.environ.get("HEAD_LR", 0.008))
@@ -116,7 +92,10 @@ class Hyperparameters:
     adam_eps = float(os.environ.get("ADAM_EPS", 1e-8))
     weight_decay = float(os.environ.get("WEIGHT_DECAY", "0.1"))
     grad_clip_norm = float(os.environ.get("GRAD_CLIP_NORM", 0.0))
-    engram_embed_lr = float(os.environ.get("ENGRAM_EMBED_LR", 0.02))
+
+    # trick: partial-key-offset — key offset on specified layers
+    rope_half_truncate = bool(int(os.environ.get("ROPE_HALF_TRUNCATE", "1")))
+    key_offset_layers = os.environ.get("KEY_OFFSET_LAYERS", "0.375,1.0")
 
     # Optional W&B logging
     enable_wandb = bool(int(os.environ.get("ENABLE_WANDB", "1")))
@@ -137,23 +116,6 @@ def hyperparameters_to_dict(args: Hyperparameters) -> dict[str, object]:
         for key, value in type(args).__dict__.items()
         if not key.startswith("_") and not callable(value)
     }
-
-
-def parse_int_csv(raw: str) -> tuple[int, ...]:
-    values = [chunk.strip() for chunk in raw.split(",") if chunk.strip()]
-    return tuple(int(value) for value in values)
-
-
-def parse_optional_int_csv(raw: str) -> tuple[int, ...]:
-    raw = raw.strip()
-    if not raw:
-        return ()
-    return parse_int_csv(raw)
-
-
-def parse_layer_fractions(raw: str, num_layers: int) -> tuple[int, ...]:
-    values = [chunk.strip() for chunk in raw.split(",") if chunk.strip()]
-    return tuple(round(float(v) * (num_layers - 1)) for v in values)
 
 # -----------------------------
 # MUON OPTIMIZER
@@ -523,99 +485,6 @@ class DistributedTokenLoader:
 # TRANSFORMER MODULES
 # -----------------------------
 
-def is_prime(n: int) -> bool:
-    if n < 2:
-        return False
-    if n % 2 == 0:
-        return n == 2
-    limit = int(math.isqrt(n))
-    for candidate in range(3, limit + 1, 2):
-        if n % candidate == 0:
-            return False
-    return True
-
-
-def find_next_prime(start: int, seen_primes: set[int]) -> int:
-    candidate = max(2, start + 1)
-    if candidate > 2 and candidate % 2 == 0:
-        candidate += 1
-    while True:
-        if is_prime(candidate) and candidate not in seen_primes:
-            return candidate
-        candidate += 1 if candidate == 2 else 2
-
-
-def resolve_engram_vocab_sizes(
-    vocab_size: int,
-    max_ngram_size: int,
-    vocab_multiplier: int,
-    vocab_sizes: tuple[int, ...],
-) -> tuple[int, ...]:
-    if vocab_sizes:
-        if len(vocab_sizes) != max_ngram_size - 1:
-            raise ValueError(
-                f"ENGRAM_VOCAB_SIZES must provide {max_ngram_size - 1} entries for ngrams 2..{max_ngram_size}"
-            )
-        return vocab_sizes
-    return tuple(max(257, vocab_size * vocab_multiplier) for _ in range(max_ngram_size - 1))
-
-
-def build_engram_head_vocab_sizes(
-    vocab_sizes: tuple[int, ...],
-    layer_ids: tuple[int, ...],
-    heads_per_ngram: int,
-) -> dict[int, list[int]]:
-    seen_primes: set[int] = set()
-    head_sizes_by_layer: dict[int, list[int]] = {}
-    for layer_id in layer_ids:
-        layer_head_sizes: list[int] = []
-        for base_vocab in vocab_sizes:
-            search_start = base_vocab - 1
-            for _head in range(heads_per_ngram):
-                prime = find_next_prime(search_start, seen_primes)
-                seen_primes.add(prime)
-                layer_head_sizes.append(prime)
-                search_start = prime
-        head_sizes_by_layer[layer_id] = layer_head_sizes
-    return head_sizes_by_layer
-
-
-def normalize_engram_text(text: str) -> str:
-    sentinel = "\ue000"
-    text = unicodedata.normalize("NFKC", text)
-    text = unicodedata.normalize("NFD", text)
-    text = "".join(ch for ch in text if not unicodedata.combining(ch))
-    text = text.lower()
-    text = re.sub(r"[ \t\r\n]+", " ", text)
-    if text == " ":
-        text = sentinel
-    text = text.strip()
-    return text.replace(sentinel, " ")
-
-
-def build_engram_compression_lookup(
-    sp: spm.SentencePieceProcessor,
-) -> tuple[Tensor, int]:
-    old_to_new: list[int] = []
-    key_to_new: dict[str, int] = {}
-
-    for token_id in range(int(sp.vocab_size())):
-        text = sp.decode_ids([token_id])
-        if "\ufffd" in text:
-            key = sp.id_to_piece(token_id)
-        else:
-            normalized = normalize_engram_text(text)
-            key = normalized if normalized else text
-
-        mapped_id = key_to_new.get(key)
-        if mapped_id is None:
-            mapped_id = len(key_to_new)
-            key_to_new[key] = mapped_id
-        old_to_new.append(mapped_id)
-
-    return torch.tensor(old_to_new, dtype=torch.long), len(key_to_new)
-
-
 class RMSNorm(nn.Module):
     def __init__(self, eps: float | None = None):
         super().__init__()
@@ -641,9 +510,16 @@ def restore_low_dim_params_to_fp32(module: nn.Module) -> None:
 
 
 class Rotary(nn.Module):
-    def __init__(self, dim: int, base: float = 10000.0):
+    def __init__(self, dim: int, base: float = 10000.0, half_truncate: bool = False):
         super().__init__()
-        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+        # trick: partial-key-offset dependency — half-truncated RoPE
+        # Only rotate first dim//4 dims; rest stay stationary so key offset targets them
+        if half_truncate:
+            steps = dim // 4
+            inv_freq = 1.0 / (base ** (torch.arange(0, steps * 2, 2, dtype=torch.float32) / (steps * 2)))
+            inv_freq = torch.cat([inv_freq, inv_freq.new_zeros(dim // 2 - steps)])
+        else:
+            inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self._seq_len_cached = 0
         self._cos_cached: Tensor | None = None
@@ -677,6 +553,8 @@ class CausalSelfAttention(nn.Module):
         num_heads: int,
         num_kv_heads: int,
         rope_base: float,
+        use_key_offset: bool = False,
+        half_truncate: bool = False,
     ):
         super().__init__()
         if dim % num_heads != 0:
@@ -693,7 +571,9 @@ class CausalSelfAttention(nn.Module):
         self.c_k = CastedLinear(dim, kv_dim, bias=False)
         self.c_v = CastedLinear(dim, kv_dim, bias=False)
         self.proj = CastedLinear(dim, dim, bias=False)
-        self.rotary = Rotary(self.head_dim, base=rope_base)
+        self.rotary = Rotary(self.head_dim, base=rope_base, half_truncate=half_truncate)
+        # trick: partial-key-offset — enable key shift on this layer
+        self.use_key_offset = use_key_offset
 
     def forward(self, x: Tensor) -> Tensor:
         bsz, seqlen, dim = x.shape
@@ -706,6 +586,10 @@ class CausalSelfAttention(nn.Module):
         cos, sin = self.rotary(seqlen, x.device, q.dtype)
         q = apply_rotary_emb(q, cos, sin)
         k = apply_rotary_emb(k, cos, sin)
+        # trick: partial-key-offset — shift stationary key dims forward by 1 position
+        if self.use_key_offset and seqlen > 1:
+            k[:, :, 1:, self.head_dim // 4:self.head_dim // 2] = k[:, :, :-1, self.head_dim // 4:self.head_dim // 2]
+            k[:, :, 1:, self.head_dim // 4 + self.head_dim // 2:] = k[:, :, :-1, self.head_dim // 4 + self.head_dim // 2:]
         y = F.scaled_dot_product_attention(
             q,
             k,
@@ -729,203 +613,24 @@ class MLP(nn.Module):
         return self.proj(F.gelu(self.fc(x)))
 
 
-class MultiHeadEmbedding(nn.Module):
-    def __init__(self, head_vocab_sizes: list[int], head_dim: int):
-        super().__init__()
-        offsets = [0]
-        for size in head_vocab_sizes[:-1]:
-            offsets.append(offsets[-1] + size)
-        self.register_buffer("offsets", torch.tensor(offsets, dtype=torch.long), persistent=False)
-        self.embedding = nn.Embedding(sum(head_vocab_sizes), head_dim)
-
-    def forward(self, input_ids: Tensor) -> Tensor:
-        return self.embedding(input_ids + self.offsets.view(1, 1, -1))
-
-
-class EngramShortConv(nn.Module):
-    def __init__(self, dim: int, kernel_size: int, dilation: int):
-        super().__init__()
-        self.norm = nn.RMSNorm(dim, eps=1e-5)
-        self.conv = nn.Conv1d(
-            dim,
-            dim,
-            kernel_size=kernel_size,
-            groups=dim,
-            bias=False,
-            padding=(kernel_size - 1) * dilation,
-            dilation=dilation,
-        )
-        nn.init.zeros_(self.conv.weight)
-
-    def forward(self, x: Tensor) -> Tensor:
-        # x: [B, L, D]
-        y = self.conv(self.norm(x).transpose(1, 2))
-        y = F.silu(y[..., : x.size(1)])
-        return y.transpose(1, 2).contiguous()
-
-
-class EngramBranch(nn.Module):
-    # trick: engram memory branch with tokenizer compression
-    def __init__(
-        self,
-        dim: int,
-        layer_id: int,
-        head_vocab_sizes: list[int],
-        max_ngram_size: int,
-        heads_per_ngram: int,
-        embed_per_ngram: int,
-        kernel_size: int,
-        pad_id: int,
-        seed: int,
-        hash_vocab_size: int,
-        compression_lookup: Tensor | None = None,
-        engram_warmup_steps: int = 0,
-        engram_soft_constraint_steps: int = 0,
-        engram_soft_constraint_min: float = 0.1,
-    ):
-        super().__init__()
-        total_heads = (max_ngram_size - 1) * heads_per_ngram
-        if total_heads <= 0:
-            raise ValueError("Engram requires max_ngram_size >= 2")
-        if embed_per_ngram % heads_per_ngram != 0:
-            raise ValueError(
-                f"ENGRAM_EMBED_PER_NGRAM ({embed_per_ngram}) must be divisible by ENGRAM_HEADS_PER_NGRAM ({heads_per_ngram})"
-            )
-        self.max_ngram_size = max_ngram_size
-        self.heads_per_ngram = heads_per_ngram
-        self.pad_id = pad_id
-        self.embed_per_ngram = embed_per_ngram
-        total_embed_dim = (max_ngram_size - 1) * embed_per_ngram
-        head_dim = embed_per_ngram // heads_per_ngram
-        self.multi_head_embedding = MultiHeadEmbedding(head_vocab_sizes, head_dim)
-        self.value_proj = nn.Linear(total_embed_dim, dim)
-        self.key_proj = nn.Linear(total_embed_dim, dim)
-        self.key_norm = nn.RMSNorm(dim, eps=1e-5)
-        self.query_norm = nn.RMSNorm(dim, eps=1e-5)
-        self.short_conv = EngramShortConv(
-            dim, kernel_size=kernel_size, dilation=max_ngram_size
-        )
-        if compression_lookup is not None:
-            self.register_buffer(
-                "compression_lookup", compression_lookup.to(torch.long), persistent=False
-            )
-        else:
-            self.compression_lookup = None
-
-        max_long = np.iinfo(np.int64).max
-        max_multiplier = int(max_long // max(hash_vocab_size, 1))
-        half_bound = max(1, max_multiplier // 2)
-        rng = np.random.default_rng(int(seed + 10007 * layer_id))
-        multipliers = rng.integers(
-            low=0,
-            high=half_bound,
-            size=(max_ngram_size,),
-            dtype=np.int64,
-        )
-        self.register_buffer(
-            "multipliers",
-            torch.from_numpy(multipliers * 2 + 1).to(torch.long),
-            persistent=False,
-        )
-        self.register_buffer("head_mods", torch.tensor(head_vocab_sizes, dtype=torch.int64), persistent=False)
-        self.register_buffer("_engram_step", torch.zeros((), dtype=torch.int64), persistent=False)
-        self.register_buffer(
-            "_engram_warmup_steps", torch.tensor(int(engram_warmup_steps), dtype=torch.int64), persistent=False
-        )
-        self.register_buffer(
-            "_engram_soft_constraint_steps",
-            torch.tensor(int(engram_soft_constraint_steps), dtype=torch.int64),
-            persistent=False,
-        )
-        self.register_buffer(
-            "_engram_soft_constraint_min",
-            torch.tensor(float(engram_soft_constraint_min), dtype=torch.float32),
-            persistent=False,
-        )
-
-    def set_step(self, step: int) -> None:
-        self._engram_step.fill_(int(step))
-
-    def _shift_tokens(self, input_ids: Tensor, shift: int) -> Tensor:
-        if shift == 0:
-            return input_ids
-        return F.pad(input_ids, (shift, 0), value=self.pad_id)[:, : input_ids.size(1)]
-
-    def _hash_input_ids(self, input_ids: Tensor) -> Tensor:
-        x = input_ids.to(dtype=torch.int64)
-        if self.compression_lookup is not None:
-            x = self.compression_lookup[x]
-        shifted_tokens = [self._shift_tokens(x, shift) for shift in range(self.max_ngram_size)]
-        head_chunks: list[Tensor] = []
-        for ngram_size in range(2, self.max_ngram_size + 1):
-            mix = shifted_tokens[0] * self.multipliers[0]
-            for idx in range(1, ngram_size):
-                mix = torch.bitwise_xor(mix, shifted_tokens[idx] * self.multipliers[idx])
-            start = (ngram_size - 2) * self.heads_per_ngram
-            stop = start + self.heads_per_ngram
-            head_chunks.append(torch.remainder(mix.unsqueeze(-1), self.head_mods[start:stop]))
-        return torch.cat(head_chunks, dim=-1)
-
-    def forward(self, hidden_states: Tensor, input_ids: Tensor) -> Tensor:
-        # hidden_states: [B, L, D]
-        embeddings = self.multi_head_embedding(self._hash_input_ids(input_ids)).flatten(start_dim=-2)
-        key = self.key_norm(self.key_proj(embeddings))
-        query = self.query_norm(hidden_states)
-        gate = (key * query).sum(dim=-1, keepdim=True) / math.sqrt(hidden_states.size(-1))
-        gate = gate.abs().clamp_min(1e-6).sqrt() * gate.sign()
-        gate_tensor = gate.sigmoid()
-        current_step = self._engram_step.to(device=gate_tensor.device)
-        warmup_steps = self._engram_warmup_steps.to(device=gate_tensor.device)
-        soft_constraint_steps = self._engram_soft_constraint_steps.to(device=gate_tensor.device)
-        soft_constraint_end = warmup_steps + soft_constraint_steps
-        warmup_mask = current_step < warmup_steps
-        gate_tensor = torch.where(warmup_mask, torch.ones_like(gate_tensor), gate_tensor)
-        soft_constraint_mask = (current_step >= warmup_steps) & (current_step < soft_constraint_end)
-        soft_constraint_min = self._engram_soft_constraint_min.to(device=gate_tensor.device, dtype=gate_tensor.dtype)
-        gate_tensor = torch.where(soft_constraint_mask, gate_tensor.clamp_min(soft_constraint_min), gate_tensor)
-        value = gate_tensor * self.value_proj(embeddings)
-        output = value + self.short_conv(value)
-        return output
-
-
 class Block(nn.Module):
     def __init__(
         self,
-        layer_id: int,
         dim: int,
         num_heads: int,
         num_kv_heads: int,
         mlp_mult: int,
         rope_base: float,
-        engram_settings: dict[str, object] | None = None,
+        use_key_offset: bool = False,
+        half_truncate: bool = False,
     ):
         super().__init__()
         self.attn_norm = RMSNorm()
         self.mlp_norm = RMSNorm()
-        self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base)
+        self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base, use_key_offset, half_truncate)
         self.mlp = MLP(dim, mlp_mult)
-        self.engram: EngramBranch | None = None
-        if engram_settings is not None and layer_id in engram_settings["layer_ids"]:
-            self.engram = EngramBranch(
-                dim=dim,
-                layer_id=layer_id,
-                head_vocab_sizes=engram_settings["head_vocab_sizes_by_layer"][layer_id],
-                max_ngram_size=int(engram_settings["max_ngram_size"]),
-                heads_per_ngram=int(engram_settings["heads_per_ngram"]),
-                embed_per_ngram=int(engram_settings["embed_per_ngram"]),
-                kernel_size=int(engram_settings["kernel_size"]),
-                pad_id=int(engram_settings["pad_id"]),
-                seed=int(engram_settings["seed"]),
-                hash_vocab_size=int(engram_settings["hash_vocab_size"]),
-                compression_lookup=engram_settings["compression_lookup"],
-                engram_warmup_steps=int(engram_settings["engram_warmup_steps"]),
-                engram_soft_constraint_steps=int(engram_settings["engram_soft_constraint_steps"]),
-                engram_soft_constraint_min=float(engram_settings["engram_soft_constraint_min"]),
-            )
 
-    def forward(self, x: Tensor, input_ids: Tensor) -> Tensor:
-        if self.engram is not None:
-            x = x + self.engram(x, input_ids)
+    def forward(self, x: Tensor) -> Tensor:
         x = x + self.attn(self.attn_norm(x))
         x = x + self.mlp(self.mlp_norm(x))
         return x
@@ -942,85 +647,26 @@ class GPT(nn.Module):
         mlp_mult: int,
         tie_embeddings: bool,
         rope_base: float,
-        engram_enabled: bool,
-        engram_layer_ids: tuple[int, ...],
-        engram_max_ngram: int,
-        engram_heads_per_ngram: int,
-        engram_embed_per_ngram: int,
-        engram_vocab_multiplier: int,
-        engram_kernel_size: int,
-        engram_pad_id: int,
-        seed: int,
-        engram_use_tokenizer_compression: bool,
-        engram_vocab_sizes: tuple[int, ...],
-        engram_compression_lookup: Tensor | None = None,
-        engram_compressed_vocab_size: int | None = None,
-        engram_warmup_steps: int = 0,
-        engram_soft_constraint_steps: int = 0,
-        engram_soft_constraint_min: float = 0.1,
+        key_offset_layers: str = "",
+        half_truncate: bool = False,
     ):
         super().__init__()
         self.tie_embeddings = tie_embeddings
-        if engram_enabled:
-            invalid_layer_ids = [layer_id for layer_id in engram_layer_ids if layer_id < 0 or layer_id >= num_layers]
-            if invalid_layer_ids:
-                raise ValueError(f"ENGRAM_LAYER_IDS out of range for NUM_LAYERS={num_layers}: {invalid_layer_ids}")
-            unique_layer_ids = tuple(sorted(set(engram_layer_ids)))
-            engram_vocab_size = (
-                engram_compressed_vocab_size
-                if engram_use_tokenizer_compression
-                else vocab_size
-            )
-            if engram_use_tokenizer_compression:
-                if (
-                    engram_compression_lookup is None
-                    or engram_compressed_vocab_size is None
-                ):
-                    raise ValueError(
-                        "Compression lookup and compressed vocab size are required when tokenizer compression is enabled"
-                    )
-                mapped_pad_id = int(engram_compression_lookup[engram_pad_id].item())
-            else:
-                mapped_pad_id = engram_pad_id
-            resolved_vocab_sizes = resolve_engram_vocab_sizes(
-                int(engram_vocab_size),
-                engram_max_ngram,
-                engram_vocab_multiplier,
-                engram_vocab_sizes,
-            )
-            engram_settings: dict[str, object] | None = {
-                "layer_ids": unique_layer_ids,
-                "head_vocab_sizes_by_layer": build_engram_head_vocab_sizes(
-                    resolved_vocab_sizes,
-                    unique_layer_ids,
-                    engram_heads_per_ngram,
-                ),
-                "max_ngram_size": engram_max_ngram,
-                "heads_per_ngram": engram_heads_per_ngram,
-                "embed_per_ngram": engram_embed_per_ngram,
-                "kernel_size": engram_kernel_size,
-                "pad_id": mapped_pad_id,
-                "seed": seed,
-                "vocab_sizes": resolved_vocab_sizes,
-                "hash_vocab_size": int(engram_vocab_size),
-                "compression_lookup": engram_compression_lookup,
-                "engram_warmup_steps": int(engram_warmup_steps),
-                "engram_soft_constraint_steps": int(engram_soft_constraint_steps),
-                "engram_soft_constraint_min": float(engram_soft_constraint_min),
-            }
-        else:
-            engram_settings = None
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
+        # trick: partial-key-offset — fraction of total layers where key offset is applied
+        offset_set = set()
+        if key_offset_layers:
+            offset_set = {round(float(x.strip()) * (num_layers - 1)) for x in key_offset_layers.split(",") if x.strip()}
         self.blocks = nn.ModuleList(
             [
                 Block(
-                    i,
                     model_dim,
                     num_heads,
                     num_kv_heads,
                     mlp_mult,
                     rope_base,
-                    engram_settings,
+                    use_key_offset=(i in offset_set),
+                    half_truncate=half_truncate,
                 )
                 for i in range(num_layers)
             ]
@@ -1028,11 +674,6 @@ class GPT(nn.Module):
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)
         self._init_weights()
-
-    def set_engram_step(self, step: int) -> None:
-        for block in self.blocks:
-            if block.engram is not None:
-                block.engram.set_step(step)
 
     
     def _init_weights(self):
@@ -1058,7 +699,7 @@ class GPT(nn.Module):
     def forward(self, input_ids: Tensor, target_ids: Tensor) -> Tensor:
         x = self.tok_emb(input_ids)
         for block in self.blocks:
-            x = block(x, input_ids)
+            x = block(x)
         x = self.final_norm(x).reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
         if self.tie_embeddings:
@@ -1164,13 +805,6 @@ def main() -> None:
         raise ValueError(
             f"VOCAB_SIZE={args.vocab_size} does not match tokenizer vocab_size={int(sp.vocab_size())}"
         )
-    engram_compression_lookup: Tensor | None = None
-    engram_compressed_vocab_size: int | None = None
-    if args.engram_enabled and args.engram_use_tokenizer_compression:
-        (
-            engram_compression_lookup,
-            engram_compressed_vocab_size,
-        ) = build_engram_compression_lookup(sp)
     dataset_dir = Path(args.data_path).resolve()
     actual_train_files = len(list(dataset_dir.glob("fineweb_train_*.bin")))
     val_tokens = load_validation_tokens(args.val_files, args.train_seq_len)
@@ -1194,22 +828,9 @@ def main() -> None:
         mlp_mult=args.mlp_mult,
         tie_embeddings=args.tie_embeddings,
         rope_base=args.rope_base,
-        engram_enabled=args.engram_enabled,
-        engram_layer_ids=parse_layer_fractions(args.engram_layer_ids, args.num_layers),
-        engram_max_ngram=args.engram_max_ngram,
-        engram_heads_per_ngram=args.engram_heads_per_ngram,
-        engram_embed_per_ngram=args.engram_embed_per_ngram,
-        engram_vocab_multiplier=args.engram_vocab_multiplier,
-        engram_kernel_size=args.engram_kernel_size,
-        engram_pad_id=args.engram_pad_id,
-        seed=args.seed,
-        engram_use_tokenizer_compression=args.engram_use_tokenizer_compression,
-        engram_vocab_sizes=parse_optional_int_csv(args.engram_vocab_sizes),
-        engram_compression_lookup=engram_compression_lookup,
-        engram_compressed_vocab_size=engram_compressed_vocab_size,
-        engram_warmup_steps=args.engram_warmup_steps,
-        engram_soft_constraint_steps=args.engram_soft_constraint_steps,
-        engram_soft_constraint_min=args.engram_soft_constraint_min,
+        # trick: partial-key-offset
+        key_offset_layers=args.key_offset_layers,
+        half_truncate=args.rope_half_truncate,
     ).to(device).bfloat16()
     for module in base_model.modules():
         if isinstance(module, CastedLinear):
@@ -1223,24 +844,12 @@ def main() -> None:
     # - untied lm_head (Adam) uses HEAD_LR
     # - matrix params in transformer blocks use MATRIX_LR via Muon
     # - vectors/scalars use SCALAR_LR via Adam
-    # - trick: Engram memory tables use a dedicated Adam LR so they do not flow through Muon
     block_named_params = list(base_model.blocks.named_parameters())
-    engram_embedding_pattern = "engram.multi_head_embedding.embedding.weight"
-    engram_embedding_params = [
-        p for name, p in block_named_params if engram_embedding_pattern in name
-    ]
-    block_named_params = [
-        (name, p) for name, p in block_named_params if engram_embedding_pattern not in name
-    ]
     matrix_params = [
         p
         for name, p in block_named_params
         if p.ndim == 2 and not any(pattern in name for pattern in CONTROL_TENSOR_NAME_PATTERNS)
     ]
-    # trick: engram-compressed — Conv1d weight is 3D, falls through ndim==2 and ndim<2 filters
-    # Use a separate Adam group (not Muon) since depthwise Conv1d shape (dim,1,kernel)
-    # causes extreme Muon gradient scaling ~22.6x
-    conv_weights = [p for name, p in block_named_params if p.ndim >= 3 and "conv.weight" in name]
     scalar_params = [
         p
         for name, p in block_named_params
@@ -1262,7 +871,6 @@ def main() -> None:
     for group in optimizer_muon.param_groups:
         group["base_lr"] = args.matrix_lr
     optimizer_scalar = torch.optim.AdamW(
-
         [{"params": scalar_params, "lr": args.scalar_lr, "base_lr": args.scalar_lr}],
         betas=(args.beta1, args.beta2),
         eps=args.adam_eps,
@@ -1270,24 +878,6 @@ def main() -> None:
         fused=True,
     )
     optimizers: list[torch.optim.Optimizer] = [optimizer_tok, optimizer_muon, optimizer_scalar]
-    if engram_embedding_params:
-        optimizer_engram = torch.optim.AdamW(
-            [{"params": engram_embedding_params, "lr": args.engram_embed_lr, "base_lr": args.engram_embed_lr}],
-            betas=(args.beta1, args.beta2),
-            eps=args.adam_eps,
-            weight_decay=0.0,
-            fused=True,
-        )
-        optimizers.append(optimizer_engram)
-    if conv_weights:
-        optimizer_conv = torch.optim.AdamW(
-            [{"params": conv_weights, "lr": args.scalar_lr, "base_lr": args.scalar_lr}],
-            betas=(args.beta1, args.beta2),
-            eps=args.adam_eps,
-            weight_decay=0.0,
-            fused=True,
-        )
-        optimizers.append(optimizer_conv)
     optimizer_head: torch.optim.Optimizer | None = None
     if base_model.lm_head is not None:
         optimizer_head = torch.optim.AdamW(
@@ -1299,28 +889,14 @@ def main() -> None:
         optimizers.insert(1, optimizer_head)
 
     n_params = sum(p.numel() for p in base_model.parameters())
-    engram_params = sum(
-        p.numel() for name, p in base_model.named_parameters() if ".engram." in name
-    )
     log0(f"model_params:{n_params}")
-    log0(
-        "engram:"
-        f"enabled={int(args.engram_enabled)} "
-        f"layers={args.engram_layer_ids} "
-        f"params:{engram_params} "
-        f"compression={int(args.engram_use_tokenizer_compression)} "
-        f"compressed_vocab_size:{engram_compressed_vocab_size if engram_compressed_vocab_size is not None else args.vocab_size} "
-        f"engram_warmup_steps:{args.engram_warmup_steps} "
-        f"engram_soft_constraint_steps:{args.engram_soft_constraint_steps} "
-        f"engram_soft_constraint_min:{args.engram_soft_constraint_min}"
-    )
     log0(f"world_size:{world_size} grad_accum_steps:{grad_accum_steps}")
     log0("sdp_backends:cudnn=False flash=True mem_efficient=False math=False")
     log0(f"attention_mode:gqa num_heads:{args.num_heads} num_kv_heads:{args.num_kv_heads}")
     log0(
         f"tie_embeddings:{args.tie_embeddings} embed_lr:{token_lr} "
         f"head_lr:{args.head_lr if base_model.lm_head is not None else 0.0} "
-        f"matrix_lr:{args.matrix_lr} scalar_lr:{args.scalar_lr} engram_embed_lr:{args.engram_embed_lr}"
+        f"matrix_lr:{args.matrix_lr} scalar_lr:{args.scalar_lr}"
     )
     log0(
         f"train_batch_tokens:{args.train_batch_tokens} train_seq_len:{args.train_seq_len} "
@@ -1441,7 +1017,6 @@ def main() -> None:
 
         should_validate = last_step or (args.val_loss_every > 0 and step % args.val_loss_every == 0)
         if should_validate:
-            base_model.set_engram_step(step)
             torch.cuda.synchronize()
             training_time_ms += 1000.0 * (time.perf_counter() - t0)
             val_loss, val_bpb = eval_val(
@@ -1484,7 +1059,6 @@ def main() -> None:
         scale = lr_mul(step, elapsed_ms)
         zero_grad_all()
         train_loss = torch.zeros((), device=device)
-        base_model.set_engram_step(step)
         for micro_step in range(grad_accum_steps):
             if distributed:
                 model.require_backward_grad_sync = micro_step == grad_accum_steps - 1
@@ -1587,7 +1161,6 @@ def main() -> None:
 
     if distributed:
         dist.barrier()
-    base_model.set_engram_step(step)
     torch.cuda.synchronize()
     t_feval = time.perf_counter()
     final_val_loss, final_val_bpb = eval_val(
@@ -1650,12 +1223,6 @@ def main() -> None:
                 "mlp_mult": args.mlp_mult,
                 "vocab_size": args.vocab_size,
                 "model_params": int(n_params),
-                "engram_enabled": bool(args.engram_enabled),
-                "engram_layer_ids": list(parse_layer_fractions(args.engram_layer_ids, args.num_layers)),
-                "engram_params": int(engram_params),
-                "engram_use_tokenizer_compression": bool(args.engram_use_tokenizer_compression),
-                "engram_compressed_vocab_size": int(engram_compressed_vocab_size or args.vocab_size),
-                "engram_vocab_sizes": list(parse_optional_int_csv(args.engram_vocab_sizes)),
             },
             "training": {
                 "iterations": args.iterations,
@@ -1694,3 +1261,68 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+====================================================================================================
+Running Python 3.12.13 (main, May  4 2026, 21:09:48) [Clang 22.1.3 ]
+Running PyTorch 2.8.0+cu128
+Tue May 12 16:29:58 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 570.124.06             Driver Version: 570.124.06     CUDA Version: 12.8     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H100 80GB HBM3          On  |   00000000:9B:00.0 Off |                    0 |
+| N/A   27C    P0            114W /  700W |    1518MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA H100 80GB HBM3          On  |   00000000:BB:00.0 Off |                    0 |
+| N/A   26C    P0            115W /  700W |    1518MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   2  NVIDIA H100 80GB HBM3          On  |   00000000:CB:00.0 Off |                    0 |
+| N/A   28C    P0            122W /  700W |    1518MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   3  NVIDIA H100 80GB HBM3          On  |   00000000:DB:00.0 Off |                    0 |
+| N/A   25C    P0            116W /  700W |    1518MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
++-----------------------------------------------------------------------------------------+
+
+====================================================================================================
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:10
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:17563648
+world_size:4 grad_accum_steps:1
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:8 num_kv_heads:4
+tie_embeddings:False embed_lr:0.6 head_lr:0.008 matrix_lr:0.04 scalar_lr:0.04
+train_batch_tokens:524288 train_seq_len:1024 iterations:1000000 warmup_steps:50 max_wallclock_seconds:1200.000
+seed:1337
+warmup_step:10/50
+warmup_step:20/50
+warmup_step:30/50
+warmup_step:40/50
+warmup_step:50/50
+step:0/1000000 val_loss:6.9314 val_bpb:4.1051 train_time:0ms step_avg:0.05ms
+step:1/1000000 train_loss:6.9313 train_time:50ms step_avg:49.63ms
+step:2/1000000 train_loss:6.8498 train_time:124ms step_avg:61.90ms
+step:3/1000000 train_loss:5.3236 train_time:202ms step_avg:67.45ms
+step:4/1000000 train_loss:5.0419 train_time:278ms step_avg:69.61ms
+step:5/1000000 train_loss:4.7742 train_time:356ms step_avg:71.29ms
+step:6/1000000 train_loss:4.7996 train_time:435ms step_avg:72.50ms
+step:7/1000000 train_loss:4.5350 train_time:512ms step_avg:73.15ms
+step:8/1000000 train_loss:4.5248 train_time:589ms step_avg:73.60ms
+step:9/1000000 train_loss:4.4633 train_time:668ms step_avg:74.17ms
+step:10/1000000 train_loss:4.4678 train_time:745ms step_avg:74.46ms
+step:200/1000000 train_loss:2.7011 train_time:15543ms step_avg:77.72ms
+step:400/1000000 train_loss:2.2870 train_time:31136ms step_avg:77.84ms

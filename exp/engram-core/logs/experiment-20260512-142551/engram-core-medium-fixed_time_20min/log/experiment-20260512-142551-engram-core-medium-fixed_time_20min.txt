@@ -1,13 +1,12 @@
 """
-Naive architecture GPT with strong training recipe + engram memory branches with tokenizer compression.
+Naive architecture GPT with strong training recipe + engram memory branches.
 
 Architecture is standard (no tricks) plus engram: GQA, RoPE, RMSNorm (no learnable weight), QK-Norm, Tied Embeddings,
 CastedLinear, restore_low_dim_params_to_fp32.
 
-Engram trick (with tokenizer compression): n-gram memory branches inserted at specific transformer layers. Each EngramBranch
-hashes input token n-grams into a multi-head embedding table, gates the retrieved values against the hidden state, and adds
-the result as a residual. Includes short-convolution mixing. Tokenizer compression maps the original token vocabulary to a
-smaller set by normalizing and deduplicating token strings, reducing the hash vocabulary size for engram lookups.
+Engram trick: n-gram memory branches inserted at specific transformer layers. Each EngramBranch hashes input token
+n-grams into a multi-head embedding table, gates the retrieved values against the hidden state, and adds the result
+as a residual. Includes short-convolution mixing and optional tokenizer compression for smaller hash vocabularies.
 
 Training recipe borrows from modded-nanogpt:
   - Muon optimizer for matrix params, Adam for scalar/embed params with separate LRs
@@ -93,9 +92,8 @@ class Hyperparameters:
     engram_vocab_sizes = os.environ.get("ENGRAM_VOCAB_SIZES", "")
     engram_kernel_size = int(os.environ.get("ENGRAM_KERNEL_SIZE", 4))
     engram_pad_id = int(os.environ.get("ENGRAM_PAD_ID", 0))
-    # trick: engram-compressed — tokenizer compression enabled by default
     engram_use_tokenizer_compression = bool(
-        int(os.environ.get("ENGRAM_USE_TOKENIZER_COMPRESSION", "1"))
+        int(os.environ.get("ENGRAM_USE_TOKENIZER_COMPRESSION", "0"))
     )
     engram_warmup_steps = int(os.environ.get("ENGRAM_WARMUP_STEPS", "0"))
     engram_soft_constraint_steps = int(os.environ.get("ENGRAM_SOFT_CONSTRAINT_STEPS", "0"))
@@ -765,7 +763,7 @@ class EngramShortConv(nn.Module):
 
 
 class EngramBranch(nn.Module):
-    # trick: engram memory branch with tokenizer compression
+    # trick: engram memory branch
     def __init__(
         self,
         dim: int,
@@ -1237,7 +1235,7 @@ def main() -> None:
         for name, p in block_named_params
         if p.ndim == 2 and not any(pattern in name for pattern in CONTROL_TENSOR_NAME_PATTERNS)
     ]
-    # trick: engram-compressed — Conv1d weight is 3D, falls through ndim==2 and ndim<2 filters
+    # trick: engram-core — Conv1d weight is 3D, falls through ndim==2 and ndim<2 filters
     # Use a separate Adam group (not Muon) since depthwise Conv1d shape (dim,1,kernel)
     # causes extreme Muon gradient scaling ~22.6x
     conv_weights = [p for name, p in block_named_params if p.ndim >= 3 and "conv.weight" in name]
@@ -1694,3 +1692,92 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+====================================================================================================
+Running Python 3.12.13 (main, May  4 2026, 21:09:48) [Clang 22.1.3 ]
+Running PyTorch 2.8.0+cu128
+Tue May 12 14:26:57 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 570.124.06             Driver Version: 570.124.06     CUDA Version: 12.8     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H100 80GB HBM3          On  |   00000000:19:00.0 Off |                    0 |
+| N/A   27C    P0            114W /  700W |    1518MiB /  81559MiB |      2%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA H100 80GB HBM3          On  |   00000000:2A:00.0 Off |                    0 |
+| N/A   30C    P0            117W /  700W |    1518MiB /  81559MiB |      2%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   2  NVIDIA H100 80GB HBM3          On  |   00000000:BB:00.0 Off |                    0 |
+| N/A   31C    P0            117W /  700W |    1518MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   3  NVIDIA H100 80GB HBM3          On  |   00000000:DB:00.0 Off |                    0 |
+| N/A   28C    P0            118W /  700W |    1518MiB /  81559MiB |      2%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
++-----------------------------------------------------------------------------------------+
+
+====================================================================================================
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:10
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:142192000
+engram:enabled=1 layers=0.125,0.5,1.0 params:7974272 compression=0 compressed_vocab_size:1024 engram_warmup_steps:0 engram_soft_constraint_steps:0 engram_soft_constraint_min:0.1
+world_size:4 grad_accum_steps:1
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:16 num_kv_heads:8
+tie_embeddings:False embed_lr:0.6 head_lr:0.008 matrix_lr:0.04 scalar_lr:0.04 engram_embed_lr:0.02
+train_batch_tokens:524288 train_seq_len:1024 iterations:1000000 warmup_steps:50 max_wallclock_seconds:1200.000
+seed:1337
+warmup_step:10/50
+warmup_step:20/50
+warmup_step:30/50
+warmup_step:40/50
+warmup_step:50/50
+step:0/1000000 val_loss:6.9320 val_bpb:4.1055 train_time:0ms step_avg:0.17ms
+step:1/1000000 train_loss:6.9322 train_time:390ms step_avg:389.57ms
+step:2/1000000 train_loss:6.8400 train_time:799ms step_avg:399.28ms
+step:3/1000000 train_loss:5.6146 train_time:1213ms step_avg:404.17ms
+step:4/1000000 train_loss:6.1284 train_time:1636ms step_avg:409.08ms
+step:5/1000000 train_loss:5.9808 train_time:2050ms step_avg:410.03ms
+step:6/1000000 train_loss:5.6538 train_time:2469ms step_avg:411.53ms
+step:7/1000000 train_loss:5.3117 train_time:2886ms step_avg:412.25ms
+step:8/1000000 train_loss:5.1758 train_time:3299ms step_avg:412.41ms
+step:9/1000000 train_loss:5.0164 train_time:3715ms step_avg:412.81ms
+step:10/1000000 train_loss:4.8423 train_time:4131ms step_avg:413.12ms
+step:200/1000000 train_loss:2.5822 train_time:83957ms step_avg:419.79ms
+step:400/1000000 train_loss:2.1131 train_time:168158ms step_avg:420.39ms
+step:600/1000000 train_loss:2.3622 train_time:253985ms step_avg:423.31ms
+step:800/1000000 train_loss:2.2606 train_time:338223ms step_avg:422.78ms
+step:1000/1000000 train_loss:2.2049 train_time:422378ms step_avg:422.38ms
+step:1000/1000000 val_loss:2.1829 val_bpb:1.2929 train_time:422385ms step_avg:422.39ms
+step:1200/1000000 train_loss:2.1583 train_time:506625ms step_avg:422.19ms
+step:1400/1000000 train_loss:2.2587 train_time:590825ms step_avg:422.02ms
+step:1600/1000000 train_loss:2.0110 train_time:674986ms step_avg:421.87ms
+step:1800/1000000 train_loss:2.0452 train_time:759013ms step_avg:421.67ms
+step:2000/1000000 train_loss:2.0599 train_time:842804ms step_avg:421.40ms
+step:2000/1000000 val_loss:2.0619 val_bpb:1.2211 train_time:842810ms step_avg:421.41ms
+step:2200/1000000 train_loss:2.1722 train_time:926490ms step_avg:421.13ms
+step:2400/1000000 train_loss:2.0679 train_time:1010151ms step_avg:420.90ms
+step:2600/1000000 train_loss:2.0617 train_time:1093790ms step_avg:420.69ms
+step:2800/1000000 train_loss:1.8656 train_time:1177430ms step_avg:420.51ms
+step:2855/1000000 val_loss:1.9572 val_bpb:1.1592 train_time:1200398ms step_avg:420.45ms
+stopping_early: wallclock_cap train_time:1200398ms step:2855/1000000
+peak memory allocated: 74591 MiB reserved: 74994 MiB
+Serialized model: 550808489 bytes
+Code size: 70525 bytes
+Total submission size: 550879014 bytes
+final val_loss:1.9572 val_bpb:1.1592 eval_time:14680ms
+final_exact val_loss:1.95723304 val_bpb:1.15918365
+Wrote final metrics to /inspire/hdd/project/high-dimensionaldata/yeshun-CZXS24250019/projects/Bag-of-tricks-for-Transformers/exp/engram-core/logs/experiment-20260512-142551/engram-core-medium-fixed_time_20min/result.json

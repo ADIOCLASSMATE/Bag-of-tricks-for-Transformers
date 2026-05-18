@@ -1,13 +1,12 @@
 """
-Naive architecture GPT with strong training recipe + engram memory branches with tokenizer compression.
+Naive architecture GPT with strong training recipe + engram memory branches.
 
 Architecture is standard (no tricks) plus engram: GQA, RoPE, RMSNorm (no learnable weight), QK-Norm, Tied Embeddings,
 CastedLinear, restore_low_dim_params_to_fp32.
 
-Engram trick (with tokenizer compression): n-gram memory branches inserted at specific transformer layers. Each EngramBranch
-hashes input token n-grams into a multi-head embedding table, gates the retrieved values against the hidden state, and adds
-the result as a residual. Includes short-convolution mixing. Tokenizer compression maps the original token vocabulary to a
-smaller set by normalizing and deduplicating token strings, reducing the hash vocabulary size for engram lookups.
+Engram trick: n-gram memory branches inserted at specific transformer layers. Each EngramBranch hashes input token
+n-grams into a multi-head embedding table, gates the retrieved values against the hidden state, and adds the result
+as a residual. Includes short-convolution mixing and optional tokenizer compression for smaller hash vocabularies.
 
 Training recipe borrows from modded-nanogpt:
   - Muon optimizer for matrix params, Adam for scalar/embed params with separate LRs
@@ -93,9 +92,8 @@ class Hyperparameters:
     engram_vocab_sizes = os.environ.get("ENGRAM_VOCAB_SIZES", "")
     engram_kernel_size = int(os.environ.get("ENGRAM_KERNEL_SIZE", 4))
     engram_pad_id = int(os.environ.get("ENGRAM_PAD_ID", 0))
-    # trick: engram-compressed — tokenizer compression enabled by default
     engram_use_tokenizer_compression = bool(
-        int(os.environ.get("ENGRAM_USE_TOKENIZER_COMPRESSION", "1"))
+        int(os.environ.get("ENGRAM_USE_TOKENIZER_COMPRESSION", "0"))
     )
     engram_warmup_steps = int(os.environ.get("ENGRAM_WARMUP_STEPS", "0"))
     engram_soft_constraint_steps = int(os.environ.get("ENGRAM_SOFT_CONSTRAINT_STEPS", "0"))
@@ -765,7 +763,7 @@ class EngramShortConv(nn.Module):
 
 
 class EngramBranch(nn.Module):
-    # trick: engram memory branch with tokenizer compression
+    # trick: engram memory branch
     def __init__(
         self,
         dim: int,
@@ -1237,7 +1235,7 @@ def main() -> None:
         for name, p in block_named_params
         if p.ndim == 2 and not any(pattern in name for pattern in CONTROL_TENSOR_NAME_PATTERNS)
     ]
-    # trick: engram-compressed — Conv1d weight is 3D, falls through ndim==2 and ndim<2 filters
+    # trick: engram-core — Conv1d weight is 3D, falls through ndim==2 and ndim<2 filters
     # Use a separate Adam group (not Muon) since depthwise Conv1d shape (dim,1,kernel)
     # causes extreme Muon gradient scaling ~22.6x
     conv_weights = [p for name, p in block_named_params if p.ndim >= 3 and "conv.weight" in name]
@@ -1694,3 +1692,153 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+====================================================================================================
+Running Python 3.12.13 (main, May  4 2026, 21:09:48) [Clang 22.1.3 ]
+Running PyTorch 2.8.0+cu128
+Tue May 12 14:51:39 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 570.124.06             Driver Version: 570.124.06     CUDA Version: 12.8     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H100 80GB HBM3          On  |   00000000:19:00.0 Off |                    0 |
+| N/A   37C    P0            119W /  700W |    1518MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA H100 80GB HBM3          On  |   00000000:2A:00.0 Off |                    0 |
+| N/A   50C    P0            132W /  700W |    1518MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   2  NVIDIA H100 80GB HBM3          On  |   00000000:BB:00.0 Off |                    0 |
+| N/A   49C    P0            128W /  700W |    1518MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   3  NVIDIA H100 80GB HBM3          On  |   00000000:DB:00.0 Off |                    0 |
+| N/A   37C    P0            123W /  700W |    1518MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
++-----------------------------------------------------------------------------------------+
+
+====================================================================================================
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:10
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:142192000
+engram:enabled=1 layers=0.125,0.5,1.0 params:7974272 compression=0 compressed_vocab_size:1024 engram_warmup_steps:0 engram_soft_constraint_steps:0 engram_soft_constraint_min:0.1
+world_size:4 grad_accum_steps:1
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:16 num_kv_heads:8
+tie_embeddings:False embed_lr:0.6 head_lr:0.008 matrix_lr:0.04 scalar_lr:0.04 engram_embed_lr:0.02
+train_batch_tokens:524288 train_seq_len:1024 iterations:19074 warmup_steps:50 max_wallclock_seconds:0.000
+seed:1337
+warmup_step:10/50
+warmup_step:20/50
+warmup_step:30/50
+warmup_step:40/50
+warmup_step:50/50
+step:0/19074 val_loss:6.9320 val_bpb:4.1055 train_time:0ms step_avg:0.14ms
+step:1/19074 train_loss:6.9322 train_time:394ms step_avg:393.67ms
+step:2/19074 train_loss:6.8400 train_time:803ms step_avg:401.53ms
+step:3/19074 train_loss:5.6146 train_time:1218ms step_avg:406.03ms
+step:4/19074 train_loss:6.1284 train_time:1638ms step_avg:409.61ms
+step:5/19074 train_loss:5.9809 train_time:2052ms step_avg:410.30ms
+step:6/19074 train_loss:5.6542 train_time:2471ms step_avg:411.90ms
+step:7/19074 train_loss:5.3116 train_time:2886ms step_avg:412.29ms
+step:8/19074 train_loss:5.1760 train_time:3301ms step_avg:412.65ms
+step:9/19074 train_loss:5.0165 train_time:3721ms step_avg:413.48ms
+step:10/19074 train_loss:4.8423 train_time:4137ms step_avg:413.66ms
+step:200/19074 train_loss:2.5837 train_time:83829ms step_avg:419.14ms
+step:400/19074 train_loss:2.1152 train_time:167892ms step_avg:419.73ms
+step:600/19074 train_loss:2.3653 train_time:251954ms step_avg:419.92ms
+step:800/19074 train_loss:2.2584 train_time:336014ms step_avg:420.02ms
+step:1000/19074 train_loss:2.2039 train_time:420067ms step_avg:420.07ms
+step:1000/19074 val_loss:2.1816 val_bpb:1.2921 train_time:420073ms step_avg:420.07ms
+step:1200/19074 train_loss:2.1587 train_time:504053ms step_avg:420.04ms
+step:1400/19074 train_loss:2.2573 train_time:587939ms step_avg:419.96ms
+step:1600/19074 train_loss:2.0098 train_time:671659ms step_avg:419.79ms
+step:1800/19074 train_loss:2.0475 train_time:755273ms step_avg:419.60ms
+step:2000/19074 train_loss:2.0586 train_time:838791ms step_avg:419.40ms
+step:2000/19074 val_loss:2.0614 val_bpb:1.2209 train_time:838797ms step_avg:419.40ms
+step:2200/19074 train_loss:2.1848 train_time:922265ms step_avg:419.21ms
+step:2400/19074 train_loss:2.0967 train_time:1005655ms step_avg:419.02ms
+step:2600/19074 train_loss:2.1075 train_time:1089011ms step_avg:418.85ms
+step:2800/19074 train_loss:1.9246 train_time:1172309ms step_avg:418.68ms
+step:3000/19074 train_loss:2.8463 train_time:1255572ms step_avg:418.52ms
+step:3000/19074 val_loss:2.0112 val_bpb:1.1912 train_time:1255579ms step_avg:418.53ms
+step:3200/19074 train_loss:2.0645 train_time:1338788ms step_avg:418.37ms
+step:3400/19074 train_loss:1.8995 train_time:1421991ms step_avg:418.23ms
+step:3600/19074 train_loss:2.0543 train_time:1505133ms step_avg:418.09ms
+step:3800/19074 train_loss:1.9208 train_time:1588240ms step_avg:417.96ms
+step:4000/19074 train_loss:2.0699 train_time:1671316ms step_avg:417.83ms
+step:4000/19074 val_loss:1.9781 val_bpb:1.1716 train_time:1671322ms step_avg:417.83ms
+step:4200/19074 train_loss:2.0547 train_time:1754427ms step_avg:417.72ms
+step:4400/19074 train_loss:1.9379 train_time:1837461ms step_avg:417.60ms
+step:4600/19074 train_loss:2.0103 train_time:1920435ms step_avg:417.49ms
+step:4800/19074 train_loss:1.9367 train_time:2003389ms step_avg:417.37ms
+step:5000/19074 train_loss:1.9103 train_time:2086365ms step_avg:417.27ms
+step:5000/19074 val_loss:1.9606 val_bpb:1.1612 train_time:2086371ms step_avg:417.27ms
+step:5200/19074 train_loss:2.1563 train_time:2169325ms step_avg:417.18ms
+step:5400/19074 train_loss:1.9479 train_time:2252252ms step_avg:417.08ms
+step:5600/19074 train_loss:1.8965 train_time:2335161ms step_avg:416.99ms
+step:5800/19074 train_loss:1.9353 train_time:2418067ms step_avg:416.91ms
+step:6000/19074 train_loss:1.8835 train_time:2500948ms step_avg:416.82ms
+step:6000/19074 val_loss:1.9441 val_bpb:1.1514 train_time:2500954ms step_avg:416.83ms
+step:6200/19074 train_loss:1.8524 train_time:2583821ms step_avg:416.75ms
+step:6400/19074 train_loss:1.6698 train_time:2666639ms step_avg:416.66ms
+step:6600/19074 train_loss:1.8470 train_time:2749443ms step_avg:416.58ms
+step:6800/19074 train_loss:1.8852 train_time:2832241ms step_avg:416.51ms
+step:7000/19074 train_loss:1.8518 train_time:2915020ms step_avg:416.43ms
+step:7000/19074 val_loss:1.9351 val_bpb:1.1461 train_time:2915026ms step_avg:416.43ms
+step:7200/19074 train_loss:1.7779 train_time:2997800ms step_avg:416.36ms
+step:7400/19074 train_loss:1.8905 train_time:3080559ms step_avg:416.29ms
+step:7600/19074 train_loss:1.9314 train_time:3163294ms step_avg:416.22ms
+step:7800/19074 train_loss:1.8133 train_time:3246034ms step_avg:416.16ms
+step:8000/19074 train_loss:1.7602 train_time:3328783ms step_avg:416.10ms
+step:8000/19074 val_loss:1.9281 val_bpb:1.1419 train_time:3328790ms step_avg:416.10ms
+step:8200/19074 train_loss:1.9322 train_time:3411530ms step_avg:416.04ms
+step:8400/19074 train_loss:1.8958 train_time:3494354ms step_avg:415.99ms
+step:8600/19074 train_loss:1.9052 train_time:3577079ms step_avg:415.94ms
+step:8800/19074 train_loss:1.8484 train_time:3659807ms step_avg:415.89ms
+step:9000/19074 train_loss:1.8685 train_time:3742533ms step_avg:415.84ms
+step:9000/19074 val_loss:1.9208 val_bpb:1.1376 train_time:3742539ms step_avg:415.84ms
+step:9200/19074 train_loss:2.0211 train_time:3825265ms step_avg:415.79ms
+step:9400/19074 train_loss:1.8685 train_time:3907985ms step_avg:415.74ms
+step:9600/19074 train_loss:1.7762 train_time:3990698ms step_avg:415.70ms
+step:9800/19074 train_loss:1.8855 train_time:4073552ms step_avg:415.67ms
+step:10000/19074 train_loss:1.7412 train_time:4156392ms step_avg:415.64ms
+step:10000/19074 val_loss:1.9160 val_bpb:1.1347 train_time:4156399ms step_avg:415.64ms
+step:10200/19074 train_loss:1.8377 train_time:4239258ms step_avg:415.61ms
+step:10400/19074 train_loss:1.8094 train_time:4322065ms step_avg:415.58ms
+step:10600/19074 train_loss:1.8101 train_time:4404892ms step_avg:415.56ms
+step:10800/19074 train_loss:1.9093 train_time:4487746ms step_avg:415.53ms
+step:11000/19074 train_loss:1.8485 train_time:4570586ms step_avg:415.51ms
+step:11000/19074 val_loss:1.9108 val_bpb:1.1317 train_time:4570592ms step_avg:415.51ms
+step:11200/19074 train_loss:1.8673 train_time:4653387ms step_avg:415.48ms
+step:11400/19074 train_loss:1.8431 train_time:4736334ms step_avg:415.47ms
+step:11600/19074 train_loss:1.8938 train_time:4819166ms step_avg:415.45ms
+step:11800/19074 train_loss:1.8977 train_time:4902016ms step_avg:415.43ms
+step:12000/19074 train_loss:1.8512 train_time:4984816ms step_avg:415.40ms
+step:12000/19074 val_loss:1.9063 val_bpb:1.1290 train_time:4984822ms step_avg:415.40ms
+step:12200/19074 train_loss:1.8701 train_time:5067600ms step_avg:415.38ms
+step:12400/19074 train_loss:1.8844 train_time:5150510ms step_avg:415.36ms
+step:12600/19074 train_loss:1.8473 train_time:5233282ms step_avg:415.34ms
+step:12800/19074 train_loss:1.7440 train_time:5316068ms step_avg:415.32ms
+step:13000/19074 train_loss:1.6594 train_time:5398788ms step_avg:415.29ms
+step:13000/19074 val_loss:1.9062 val_bpb:1.1290 train_time:5398795ms step_avg:415.29ms
+step:13200/19074 train_loss:1.8360 train_time:5481615ms step_avg:415.27ms
+step:13400/19074 train_loss:1.8395 train_time:5564389ms step_avg:415.25ms
+step:13600/19074 train_loss:1.8789 train_time:5647149ms step_avg:415.23ms
+step:13800/19074 train_loss:1.8139 train_time:5729932ms step_avg:415.21ms
+step:14000/19074 train_loss:1.7358 train_time:5812583ms step_avg:415.18ms
+step:14000/19074 val_loss:1.9025 val_bpb:1.1268 train_time:5812589ms step_avg:415.18ms
+step:14200/19074 train_loss:1.7292 train_time:5895217ms step_avg:415.16ms
+step:14400/19074 train_loss:1.8438 train_time:5978057ms step_avg:415.14ms

@@ -1,0 +1,88 @@
+========================================
+=== 4GPU Test Suite: 3 tricks ===
+=== Wallclock: 1200s ===
+=== Started at Fri May 15 11:42:24 UTC 2026 ===
+========================================
+
+========================================
+=== Testing: self-attention-lambda-on-weights ===
+========================================
+--- Dry-run validation ---
+[self-attention-lambda-on-weights-fixed_time_10min]
+  variant: self-attention-lambda-on-weights
+  control: fixed_compute (fixed_compute)
+  trainer: /inspire/hdd/project/high-dimensionaldata/yeshun-CZXS24250019/projects/Bag-of-tricks-for-Transformers/exp/self-attention-lambda-on-weights/train_gpt.py
+  run_id: experiment-20260515-114224-self-attention-lambda-on-weights-fixed_time_10min
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=0 actual=None
+  wallclock: target=1200.0 max=1200.0
+  output: /inspire/hdd/project/high-dimensionaldata/yeshun-CZXS24250019/projects/Bag-of-tricks-for-Transformers/exp/self-attention-lambda-on-weights/logs/experiment-20260515-114224/self-attention-lambda-on-weights-fixed_time_10min/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29500 /inspire/hdd/project/high-dimensionaldata/yeshun-CZXS24250019/projects/Bag-of-tricks-for-Transformers/exp/self-attention-lambda-on-weights/train_gpt.py
+[self-attention-lambda-on-weights-fixed_tokens_10b]
+  variant: self-attention-lambda-on-weights
+  control: fixed_tokens (fixed_tokens)
+  trainer: /inspire/hdd/project/high-dimensionaldata/yeshun-CZXS24250019/projects/Bag-of-tricks-for-Transformers/exp/self-attention-lambda-on-weights/train_gpt.py
+  run_id: experiment-20260515-114224-self-attention-lambda-on-weights-fixed_tokens_10b
+  model: layers=9 dim=512 heads=8 kv_heads=4 mlp_mult=2
+  tokens: target=10000000000 actual=10000269312
+  wallclock: target=0.0 max=0.0
+  output: /inspire/hdd/project/high-dimensionaldata/yeshun-CZXS24250019/projects/Bag-of-tricks-for-Transformers/exp/self-attention-lambda-on-weights/logs/experiment-20260515-114224/self-attention-lambda-on-weights-fixed_tokens_10b/result.json
+  command: torchrun --standalone --nproc_per_node=4 --master_port=29501 /inspire/hdd/project/high-dimensionaldata/yeshun-CZXS24250019/projects/Bag-of-tricks-for-Transformers/exp/self-attention-lambda-on-weights/train_gpt.py
+--- Dry-run passed ---
+--- Launching training ---
+Running self-attention-lambda-on-weights / fixed_compute (experiment-20260515-114225-self-attention-lambda-on-weights-fixed_time_10min)
+W0515 11:42:47.985000 18036 torch/distributed/run.py:774] 
+W0515 11:42:47.985000 18036 torch/distributed/run.py:774] *****************************************
+W0515 11:42:47.985000 18036 torch/distributed/run.py:774] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W0515 11:42:47.985000 18036 torch/distributed/run.py:774] *****************************************
+/inspire/hdd/project/high-dimensionaldata/yeshun-CZXS24250019/projects/Bag-of-tricks-for-Transformers/exp/self-attention-lambda-on-weights/logs/experiment-20260515-114225/self-attention-lambda-on-weights-fixed_time_10min/log/experiment-20260515-114225-self-attention-lambda-on-weights-fixed_time_10min.txt
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:10
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:17563657
+world_size:4 grad_accum_steps:2
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:8 num_kv_heads:4
+tie_embeddings:False embed_lr:0.6 head_lr:0.008 matrix_lr:0.04 scalar_lr:0.04
+train_batch_tokens:524288 train_seq_len:1024 iterations:1000000 warmup_steps:50 max_wallclock_seconds:1200.000
+seed:1337
+wandb: WARNING Using a boolean value for 'reinit' is deprecated. Use 'return_previous' or 'finish_previous' instead.
+wandb: Tracking run with wandb version 0.25.1
+wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+wandb: Run data is saved locally in /inspire/hdd/project/high-dimensionaldata/yeshun-CZXS24250019/projects/Bag-of-tricks-for-Transformers/wandb/self-attention-lambda-on-weights-fixed_time_10min/wandb/offline-run-20260515_114401-u5788jzg
+warmup_step:10/50
+warmup_step:20/50
+warmup_step:30/50
+warmup_step:40/50
+warmup_step:50/50
+step:0/1000000 val_loss:6.9314 val_bpb:4.1051 train_time:0ms step_avg:0.03ms
+step:1/1000000 train_loss:6.9312 train_time:70ms step_avg:69.75ms
+step:2/1000000 train_loss:6.8505 train_time:148ms step_avg:74.05ms
+step:3/1000000 train_loss:5.3116 train_time:229ms step_avg:76.40ms
+step:4/1000000 train_loss:5.0297 train_time:309ms step_avg:77.16ms
+step:5/1000000 train_loss:4.7919 train_time:390ms step_avg:77.99ms
+step:6/1000000 train_loss:4.7760 train_time:469ms step_avg:78.23ms
+step:7/1000000 train_loss:4.5723 train_time:552ms step_avg:78.83ms
+step:8/1000000 train_loss:4.4818 train_time:630ms step_avg:78.77ms
+step:9/1000000 train_loss:4.4923 train_time:711ms step_avg:78.97ms
+step:10/1000000 train_loss:4.4501 train_time:789ms step_avg:78.94ms
+step:200/1000000 train_loss:2.6861 train_time:16279ms step_avg:81.40ms
+step:400/1000000 train_loss:2.3395 train_time:32849ms step_avg:82.12ms
+step:600/1000000 train_loss:2.5553 train_time:49247ms step_avg:82.08ms
+step:800/1000000 train_loss:2.3697 train_time:65701ms step_avg:82.13ms
+step:1000/1000000 train_loss:2.4327 train_time:82143ms step_avg:82.14ms
+step:1000/1000000 val_loss:2.3909 val_bpb:1.4160 train_time:82152ms step_avg:82.15ms
+step:1200/1000000 train_loss:2.4143 train_time:98648ms step_avg:82.21ms
+step:1400/1000000 train_loss:2.4256 train_time:115196ms step_avg:82.28ms
+step:1600/1000000 train_loss:2.2183 train_time:131483ms step_avg:82.18ms
+step:1800/1000000 train_loss:2.3213 train_time:147849ms step_avg:82.14ms
+step:2000/1000000 train_loss:2.3680 train_time:164231ms step_avg:82.12ms
+step:2000/1000000 val_loss:2.2936 val_bpb:1.3584 train_time:164248ms step_avg:82.12ms
+step:2200/1000000 train_loss:2.4233 train_time:180703ms step_avg:82.14ms
+step:2400/1000000 train_loss:2.3669 train_time:197111ms step_avg:82.13ms
+step:2600/1000000 train_loss:2.2588 train_time:213500ms step_avg:82.12ms
+step:2800/1000000 train_loss:2.2395 train_time:229766ms step_avg:82.06ms
+step:3000/1000000 train_loss:2.7294 train_time:246178ms step_avg:82.06ms
+step:3000/1000000 val_loss:2.2531 val_bpb:1.3344 train_time:246195ms step_avg:82.06ms
+step:3200/1000000 train_loss:2.3160 train_time:262522ms step_avg:82.04ms
+step:3400/1000000 train_loss:2.1736 train_time:278968ms step_avg:82.05ms
