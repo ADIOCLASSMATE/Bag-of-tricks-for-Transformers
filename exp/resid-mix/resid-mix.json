@@ -36,7 +36,7 @@
   },
   "experiments": [
     {
-      "name": "resid-mix-fixed_time_20min",
+      "name": "resid-mix-small-fixed_time_20min",
       "trainer_path": "exp/resid-mix/train_gpt.py",
       "control": {
         "mode": "fixed_compute",
@@ -45,7 +45,7 @@
       }
     },
     {
-      "name": "resid-mix-fixed_tokens_10b",
+      "name": "resid-mix-small-fixed_tokens_10b",
       "trainer_path": "exp/resid-mix/train_gpt.py",
       "control": {
         "mode": "fixed_tokens",

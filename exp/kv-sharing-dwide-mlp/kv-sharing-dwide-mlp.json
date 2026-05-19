@@ -38,7 +38,7 @@
   },
   "experiments": [
     {
-      "name": "kv-sharing-dwide-mlp-fixed_time_20min",
+      "name": "kv-sharing-dwide-mlp-small-fixed_time_20min",
       "trainer_path": "exp/kv-sharing-dwide-mlp/train_gpt.py",
       "control": {
         "mode": "fixed_compute",
@@ -47,7 +47,7 @@
       }
     },
     {
-      "name": "kv-sharing-dwide-mlp-fixed_tokens_10b",
+      "name": "kv-sharing-dwide-mlp-small-fixed_tokens_10b",
       "trainer_path": "exp/kv-sharing-dwide-mlp/train_gpt.py",
       "control": {
         "mode": "fixed_tokens",

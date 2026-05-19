@@ -36,7 +36,7 @@ EXPERIMENTS=(
     "loop-share-all|exp/loop-share-all/loop-share-all-medium.json"
     "kv-sharing-dwide-mlp|exp/kv-sharing-dwide-mlp/kv-sharing-dwide-mlp-medium.json"
     "resid-mix|exp/resid-mix/resid-mix-medium.json"
-    "residual-lambda-init-11|exp/residual-lambda-init-11/residual-lambda-init-11-medium.json"
+    "resid-mix-init11|exp/resid-mix-init11/resid-mix-init11-medium.json"
     "sandwich-norm|exp/sandwich-norm/sandwich-norm-medium.json"
     "scale-residual|exp/scale-residual/scale-residual-medium.json"
     "unet-skip|exp/unet-skip/unet-skip-medium.json"

@@ -16,22 +16,27 @@ exec &> >(tee -a "$LOG_FILE")
 #############################
 ## 给定exp id
 TRICKS=(
-    "partial-key-offset"
-    "sparse-attn-gate"
-    "paired-head-attention"
-    "xsa"
-    "yarn"
-    "multi-token-prediction"
-    "factored-embedding"
+    "baseline"
+    "tie-embed"
+    "loop-share-mid"
+    "loop-share-first"
+    "loop-share-all"
+    "kv-sharing-dwide-mlp"
+    "kv-sharing-only"
+    "dwide-mlp-only"
+    "resid-mix"
+    "resid-mix-init11"
+    "resid-mix-tie-embedding"
 )
 
 cd "$PROJECT_DIR"
 
 NPROC=${NPROC:-4}
 WALLCLOCK_SECONDS=${WALLCLOCK_SECONDS:-1200}
+TOTAL_RUNS=$(( ${#TRICKS[@]} * 2 ))
 
 echo "========================================"
-echo "=== ${NPROC}GPU Test Suite: ${#TRICKS[@]} tricks ==="
+echo "=== ${NPROC}GPU Test Suite: ${#TRICKS[@]} tricks (${TOTAL_RUNS} manifests) ==="
 echo "=== Wallclock: ${WALLCLOCK_SECONDS}s ==="
 echo "=== Started at $(date) ==="
 echo "========================================"
@@ -89,10 +94,13 @@ done
 
 echo "========================================"
 echo "=== Test Suite Complete ==="
-echo "=== Passed: ${PASSED}/${#TRICKS[@]} ==="
-echo "=== Failed: ${FAILED}/${#TRICKS[@]} ==="
+echo "=== Passed: ${PASSED}/${TOTAL_RUNS} ==="
+echo "=== Failed: ${FAILED}/${TOTAL_RUNS} ==="
 if [ ${#FAILED_LIST[@]} -gt 0 ]; then
-    echo "=== Failed tricks: ${FAILED_LIST[*]} ==="
+    # dedupe (a trick may fail twice — once per manifest)
+    UNIQUE_FAILED=$(printf '%s\n' "${FAILED_LIST[@]}" | sort -u | tr '\n' ' ')
+    echo "=== Failed manifests: ${FAILED_LIST[*]} ==="
+    echo "=== Failed tricks (unique): ${UNIQUE_FAILED}==="
 fi
 echo "=== Finished at $(date) ==="
 echo "=== Log: ${LOG_FILE} ==="

@@ -1,14 +1,20 @@
 """
-trick: loop-share-mid — Unique first blocks + weight-shared middle blocks (looped) + unique remaining blocks
+Trick: dwide-mlp-only — Double-wide MLP in the last N layers, no KV sharing.
 
-Architecture is standard GPT (no baseline-sp1024 tricks) plus:
-  - Unique first N blocks + shared middle blocks repeated M times + unique remaining blocks
+Last N layers use an MLP with doubled hidden dimension (mlp_mult * 2); all layers
+keep independent c_k / c_v (no cross-layer sharing). This is the "wider-MLP alone"
+ablation that, together with `kv-sharing-only`, lets us attribute the improvements
+seen in `kv-sharing-dwide-mlp`.
+
+Net parameter effect vs baseline: significantly larger (one extra MLP doubled
+adds ~2 * mlp_mult * dim^2 params per wide layer).
 
 Architecture: GQA, RoPE, RMSNorm (no learnable weight), QK-Norm, untied embeddings,
-GELU MLP, standard residual, CastedLinear, restore_low_dim_params_to_fp32.
+GELU MLP (with last N layers widened), standard residual, CastedLinear,
+restore_low_dim_params_to_fp32.
 
 Training recipe (identical to baseline):
-  - Muon optimizer for 2D matrix params in transformer blocks (encoder + loop + decoder)
+  - Muon optimizer for 2D matrix params in transformer blocks
   - AdamW for scalar/control params, token embedding, and lm_head with separate LRs
   - Muon momentum warmup
   - Weight decay: 0.0 on token embedding, Muon, and scalar params; 0.1 on lm_head
@@ -41,19 +47,53 @@ from trainlib.hyperparameters import Hyperparameters as _BaseHyperparameters, hy
 from trainlib.optimizer import CONTROL_TENSOR_NAME_PATTERNS, Muon
 from trainlib.validation import build_sentencepiece_luts, load_validation_tokens, eval_val
 from trainlib.dataloader import DistributedTokenLoader
-from trainlib.transformer import Block, CastedLinear, RMSNorm, restore_low_dim_params_to_fp32
+from trainlib.transformer import (
+    RMSNorm, CastedLinear, Rotary, apply_rotary_emb, restore_low_dim_params_to_fp32,
+    CausalSelfAttention,
+)
 
 
 class Hyperparameters(_BaseHyperparameters):
-    # trick: loop-share-mid — fraction of unique first + shared middle + unique remaining
-    num_unique_encoder = float(os.environ.get("NUM_UNIQUE_ENCODER", "0.1111"))
-    num_loop_layers = float(os.environ.get("NUM_LOOP_LAYERS", "0.3333"))
-    num_loop_repeats = int(os.environ.get("NUM_LOOP_REPEATS", "3"))
+    # Fraction (or absolute count) of the last layers whose MLP hidden dim is doubled.
+    num_wide_mlp_layers = float(os.environ.get("NUM_WIDE_MLP_LAYERS", "0.2222"))
 
 
 # -----------------------------
-# TRANSFORMER MODULES (custom GPT for loop-share-mid)
+# TRANSFORMER MODULES (custom for dwide-mlp-only)
 # -----------------------------
+
+class MLP(nn.Module):
+    def __init__(self, dim: int, mlp_mult: int, mlp_mult_override: int | None = None):
+        super().__init__()
+        hidden = (mlp_mult_override or mlp_mult) * dim
+        self.fc = CastedLinear(dim, hidden, bias=False)
+        self.proj = CastedLinear(hidden, dim, bias=False)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.proj(F.gelu(self.fc(x)))
+
+
+class Block(nn.Module):
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int,
+        num_kv_heads: int,
+        mlp_mult: int,
+        rope_base: float,
+        mlp_mult_override: int | None = None,
+    ):
+        super().__init__()
+        self.attn_norm = RMSNorm()
+        self.mlp_norm = RMSNorm()
+        self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base)
+        self.mlp = MLP(dim, mlp_mult, mlp_mult_override=mlp_mult_override)
+
+    def forward(self, x: Tensor) -> Tensor:
+        x = x + self.attn(self.attn_norm(x))
+        x = x + self.mlp(self.mlp_norm(x))
+        return x
+
 
 class GPT(nn.Module):
     def __init__(
@@ -66,23 +106,17 @@ class GPT(nn.Module):
         mlp_mult: int,
         tie_embeddings: bool,
         rope_base: float,
-        num_unique_encoder: float,
-        num_loop_layers: float,
-        num_loop_repeats: int,
+        num_wide_mlp_layers: float = 0.2222,
     ):
         super().__init__()
         self.tie_embeddings = tie_embeddings
-        # fractions → absolute counts
-        if 0 < num_unique_encoder <= 1:
-            num_unique_encoder = max(1, round(num_unique_encoder * num_layers))
-        if 0 < num_loop_layers <= 1:
-            num_loop_layers = max(1, round(num_loop_layers * num_layers))
-        self.num_unique_encoder = num_unique_encoder
-        self.num_loop_layers = num_loop_layers
-        self.num_loop_repeats = num_loop_repeats
+        self.num_layers = num_layers
+        if 0 < num_wide_mlp_layers <= 1:
+            num_wide_mlp_layers = max(1, round(num_wide_mlp_layers * num_layers))
+        self.num_wide_mlp_layers = num_wide_mlp_layers
+        first_wide_layer = num_layers - num_wide_mlp_layers
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
-        # trick: loop-share-mid — unique first blocks + shared middle + unique remaining
-        self.encoder_blocks = nn.ModuleList(
+        self.blocks = nn.ModuleList(
             [
                 Block(
                     model_dim,
@@ -90,34 +124,9 @@ class GPT(nn.Module):
                     num_kv_heads,
                     mlp_mult,
                     rope_base,
+                    mlp_mult_override=(mlp_mult * 2) if i >= first_wide_layer else None,
                 )
-                for _ in range(num_unique_encoder)
-            ]
-        )
-        self.loop_blocks = nn.ModuleList(
-            [
-                Block(
-                    model_dim,
-                    num_heads,
-                    num_kv_heads,
-                    mlp_mult,
-                    rope_base,
-                )
-                for _ in range(num_loop_layers)
-            ]
-        )
-        num_decoder = num_layers - num_unique_encoder - num_loop_layers
-        self.num_decoder_layers = num_decoder
-        self.decoder_blocks = nn.ModuleList(
-            [
-                Block(
-                    model_dim,
-                    num_heads,
-                    num_kv_heads,
-                    mlp_mult,
-                    rope_base,
-                )
-                for _ in range(num_decoder)
+                for i in range(num_layers)
             ]
         )
         self.final_norm = RMSNorm()
@@ -146,15 +155,7 @@ class GPT(nn.Module):
 
     def forward(self, input_ids: Tensor, target_ids: Tensor) -> Tensor:
         x = self.tok_emb(input_ids)
-        # trick: loop-share-mid — unique first blocks
-        for block in self.encoder_blocks:
-            x = block(x)
-        # trick: loop-share-mid — looped middle block
-        for rep in range(self.num_loop_repeats):
-            for block in self.loop_blocks:
-                x = block(x)
-        # trick: loop-share-mid — unique remaining blocks
-        for block in self.decoder_blocks:
+        for block in self.blocks:
             x = block(x)
         x = self.final_norm(x).reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
@@ -288,9 +289,7 @@ def main() -> None:
         mlp_mult=args.mlp_mult,
         tie_embeddings=args.tie_embeddings,
         rope_base=args.rope_base,
-        num_unique_encoder=args.num_unique_encoder,
-        num_loop_layers=args.num_loop_layers,
-        num_loop_repeats=args.num_loop_repeats,
+        num_wide_mlp_layers=args.num_wide_mlp_layers,
     ).to(device).bfloat16()
     for module in base_model.modules():
         if isinstance(module, CastedLinear):
@@ -304,8 +303,7 @@ def main() -> None:
     # - untied lm_head (Adam) uses HEAD_LR
     # - matrix params in transformer blocks use MATRIX_LR via Muon
     # - vectors/scalars use SCALAR_LR via Adam
-    # trick: loop-share-mid — collect params from encoder + loop + decoder blocks
-    block_named_params = list(base_model.encoder_blocks.named_parameters()) + list(base_model.loop_blocks.named_parameters()) + list(base_model.decoder_blocks.named_parameters())
+    block_named_params = list(base_model.blocks.named_parameters())
     matrix_params = [
         p
         for name, p in block_named_params
@@ -365,7 +363,6 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
-    log0(f"trick:loop-share-mid encoder:{args.num_unique_encoder} loop_layers:{args.num_loop_layers} loop_repeats:{args.num_loop_repeats} decoder:{base_model.num_decoder_layers}")
 
     if master_process and args.enable_wandb and args.wandb_mode != "disabled":
         try:

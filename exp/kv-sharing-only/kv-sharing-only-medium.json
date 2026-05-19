@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "trainer_path": "exp/tie-embed/train_gpt.py",
+  "trainer_path": "exp/kv-sharing-only/train_gpt.py",
   "launcher": {
     "nproc_per_node": 4,
     "master_port_base": 29500
@@ -11,17 +11,17 @@
     "vocab_size": 1024,
     "train_batch_tokens": 524288,
     "train_seq_len": 1024,
+    "grad_accum_steps": 2,
     "warmup_steps": 50,
-    "warmdown_iters": 1500,
+    "warmdown_iters": 800,
     "enable_wandb": 1,
     "wandb_mode": "offline",
     "wandb_project": "bag-of-tricks-for-transformers",
-    "num_layers": 9,
-    "model_dim": 512,
-    "num_heads": 8,
-    "num_kv_heads": 4,
+    "num_layers": 18,
+    "model_dim": 1024,
+    "num_heads": 16,
+    "num_kv_heads": 8,
     "mlp_mult": 2,
-    "tie_embeddings": 1,
     "tied_embed_lr": 0.05,
     "embed_lr": 0.6,
     "head_lr": 0.008,
@@ -32,12 +32,15 @@
     "muon_momentum_warmup_start": 0.85,
     "muon_momentum_warmup_steps": 800,
     "grad_clip_norm": 0.0,
+    "num_kv_shared_layers": 0.2222,
+    "use_double_wide_mlp": 0,
     "wandb_entity": "Bag-of-Tricks",
-    "wandb_group": "small-ablation"
+    "wandb_group": "medium-ablation"
   },
   "experiments": [
     {
-      "name": "tie-embed-small-fixed_time_20min",
+      "name": "kv-sharing-only-medium-fixed_time_20min",
+      "trainer_path": "exp/kv-sharing-only/train_gpt.py",
       "control": {
         "mode": "fixed_compute",
         "target_wallclock_seconds": 1200,
@@ -45,7 +48,8 @@
       }
     },
     {
-      "name": "tie-embed-small-fixed_tokens_10b",
+      "name": "kv-sharing-only-medium-fixed_tokens_10b",
+      "trainer_path": "exp/kv-sharing-only/train_gpt.py",
       "control": {
         "mode": "fixed_tokens",
         "target_train_tokens": 10000000000

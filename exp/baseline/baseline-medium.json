@@ -11,13 +11,13 @@
     "vocab_size": 1024,
     "train_batch_tokens": 524288,
     "train_seq_len": 1024,
+    "grad_accum_steps": 2,
     "warmup_steps": 50,
     "warmdown_iters": 800,
     "enable_wandb": 1,
     "wandb_mode": "offline",
     "wandb_project": "bag-of-tricks-for-transformers",
     "wandb_entity": "Bag-of-Tricks",
-    "wandb_group": "medium-ablation",
     "num_layers": 18,
     "model_dim": 1024,
     "num_heads": 16,
@@ -32,7 +32,8 @@
     "muon_backend_steps": 5,
     "muon_momentum_warmup_start": 0.85,
     "muon_momentum_warmup_steps": 800,
-    "grad_clip_norm": 0.0
+    "grad_clip_norm": 0.0,
+    "wandb_group": "medium-ablation"
   },
   "experiments": [
     {

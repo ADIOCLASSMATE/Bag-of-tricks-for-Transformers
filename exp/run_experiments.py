@@ -115,6 +115,8 @@ ENV_KEY_MAP = {
     "per_layer_embed_scale": "PER_LAYER_EMBED_SCALE",
     "num_kv_shared_layers": "NUM_KV_SHARED_LAYERS",
     "use_double_wide_mlp": "USE_DOUBLE_WIDE_MLP",
+    # trick: dwide-mlp-only — fraction of last layers whose MLP hidden is doubled
+    "num_wide_mlp_layers": "NUM_WIDE_MLP_LAYERS",
     # Loop experiment hyperparameters
     "num_loop_layers": "NUM_LOOP_LAYERS",
     "num_loop_repeats": "NUM_LOOP_REPEATS",
@@ -399,6 +401,9 @@ def build_run_config(
     result_json_path = run_dir / "result.json"
 
     env = {key: value for key, value in os.environ.items()}
+    project_root = str(Path(__file__).resolve().parent.parent)
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = f"{project_root}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else project_root
     for key, value in config.items():
         env_key = ENV_KEY_MAP.get(key)
         if env_key is not None and value is not None:
@@ -409,7 +414,6 @@ def build_run_config(
     env["CONTROL_MODE"] = str(resolved_control["mode"])
     env["TARGET_TRAIN_TOKENS"] = str(resolved_control.get("target_train_tokens", 0) or 0)
     env["WANDB_RUN_NAME"] = run_id
-    env.setdefault("WANDB_GROUP", batch_id)
     env.setdefault("WANDB_DIR", str(Path.cwd() / "wandb" / safe_name))
 
     nproc_per_node = int(launcher.get("nproc_per_node", 8))

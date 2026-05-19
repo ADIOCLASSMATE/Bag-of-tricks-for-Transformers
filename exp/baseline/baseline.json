@@ -17,7 +17,6 @@
     "wandb_mode": "offline",
     "wandb_project": "bag-of-tricks-for-transformers",
     "wandb_entity": "Bag-of-Tricks",
-    "wandb_group": "small-ablation",
     "num_layers": 9,
     "model_dim": 512,
     "num_heads": 8,
@@ -32,11 +31,12 @@
     "muon_backend_steps": 5,
     "muon_momentum_warmup_start": 0.85,
     "muon_momentum_warmup_steps": 800,
-    "grad_clip_norm": 0.0
+    "grad_clip_norm": 0.0,
+    "wandb_group": "small-ablation"
   },
   "experiments": [
     {
-      "name": "baseline-fixed_time_20min",
+      "name": "baseline-small-fixed_time_20min",
       "trainer_path": "exp/baseline/train_gpt.py",
       "control": {
         "mode": "fixed_compute",
@@ -45,7 +45,7 @@
       }
     },
     {
-      "name": "baseline-fixed_tokens_10b",
+      "name": "baseline-small-fixed_tokens_10b",
       "trainer_path": "exp/baseline/train_gpt.py",
       "control": {
         "mode": "fixed_tokens",

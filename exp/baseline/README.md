@@ -1,29 +1,25 @@
 # Baseline Experiment
 
-Naive architecture GPT with strong training recipe. Architecture is standard (no tricks); training uses modded-nanogpt's Muon+Adam optimizer setup.
+Naive architecture GPT with strong training recipe. Architecture is standard (no tricks); training uses modded-nanogpt's Muon + AdamW optimizer setup.
 
 ## Architecture (naive, no tricks)
 
-- GQA (8 query heads, 4 KV heads)
+- GQA (8 query heads, 4 KV heads on small; 16 / 8 on medium)
 - RoPE (base=10000)
 - RMSNorm without learnable weight (pre-norm)
 - QK-Norm (RMS normalize Q and K before RoPE)
-- Tied Embeddings
+- **Untied embeddings** (separate `tok_emb` and `lm_head`)
 - GELU MLP
 - Standard residual `x + sublayer(x)`
 - CastedLinear (fp32 master weights + bf16 matmul)
 - restore_low_dim_params_to_fp32
 
-## Results
+## Configs
 
-| Regime | Val BPB | Val Loss | Train Tokens | Wall-clock | Peak Memory |
-|---|---|---|---|---|---|
-| Fixed Compute (10 min) | 1.2938 | 2.1845 | 7.63B | 600s | 8,389 MiB |
-| Fixed Tokens (10B) | 1.2847 | 2.1692 | 10.00B | 771s | 8,389 MiB |
-
-| Model | Params | Dim | Heads | KV Heads | MLP Mult | Layers |
+| Model | Layers | Dim | Heads | KV Heads | MLP Mult | Params |
 |---|---|---|---|---|---|---|
-| GPT | 17.04M | 512 | 8 | 4 | 2 | 9 |
+| small | 9 | 512 | 8 | 4 | 2 | ~17.56M |
+| medium | 18 | 1024 | 16 | 8 | 2 | (re-measure after re-run) |
 
 ## Architectural Tricks Removed (vs parameter-golf-baseline)
 
@@ -38,19 +34,27 @@ Naive architecture GPT with strong training recipe. Architecture is standard (no
 | Input RMSNorm on embedding | Removed |
 | Zero-init for output projections | Default PyTorch init |
 | Small embedding init (std=0.005) | Default nn.Embedding init |
+| Tied embeddings | Untied (separate tok_emb and lm_head) |
 
 ## Training Recipe (strong, from modded-nanogpt)
 
-- **Muon** optimizer for 2D matrix params (lr=0.04)
-- **Adam** for scalar/control params (lr=0.04)
-- **Adam** for token embedding (lr=0.05 tied / 0.6 untied)
-- **Adam** for lm_head when untied (lr=0.008)
-- Muon momentum warmup (0.85 → 0.95 over 500 steps)
-- No weight decay, no grad clip
+- **Muon** optimizer for 2D matrix params in transformer blocks (lr=0.04)
+- **AdamW** for scalar/control params (lr=0.04)
+- **AdamW** for token embedding (lr=0.6 untied)
+- **AdamW** for `lm_head` (lr=0.008, weight_decay=0.1)
+- Weight decay: 0 on token embedding, 0 on Muon, 0 on scalar/control params, 0.1 on `lm_head` only
+- Muon momentum warmup (0.85 → 0.95 over 800 steps)
 - JIT warmup (20 steps) with state reset
-- Linear warmdown in last 1200 steps
+- Linear warmdown in last 1500 steps (small) / 800 steps (medium)
+
+## Control modes (per experiment in this manifest)
+
+| Name | Mode | Target |
+|---|---|---|
+| `*-fixed_time_20min` | `fixed_compute` | 1200 s wall-clock, iterations capped at 1M |
+| `*-fixed_tokens_10b` | `fixed_tokens` | 10B training tokens, no wall-clock cap |
 
 ## Files
 
-- `train_gpt.py`: Baseline training script
-- `baseline.json`: Experiment manifest
+- `train_gpt.py` — baseline trainer
+- `baseline.json` / `baseline-medium.json` — small / medium manifests

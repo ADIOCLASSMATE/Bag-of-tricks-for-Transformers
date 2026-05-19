@@ -1,4 +1,10 @@
-# resid-mix — learnable per-channel residual mixing with the embedding
+# resid-mix-tie-embedding — resid-mix under tied embedding
+
+## What this tests
+
+Standard `resid-mix` uses separate input embedding and output projection (lm_head) matrices. This experiment tests whether resid-mix still helps when the embedding is **tied** — the lm_head weight is shared with the input embedding matrix.
+
+The baseline is also a tie-embedding model, so any delta is attributable purely to resid-mix under the tie constraint.
 
 ## Trick
 
@@ -12,9 +18,7 @@ where `mix` is a learnable `[2, dim]` parameter (one scalar per residual channel
 
 ## Initialization (identity-equivalent)
 
-`resid_mix` is initialized at `[1.0, 0.0]` per channel, so at step 0 the model is **bit-identical to baseline**. Any improvement is therefore attributable to the learnable mixing alone — this is a clean single-variable architectural ablation.
-
-(The companion experiment `resid-mix-init11` tests the same architecture with a non-identity init `[1.1, 0.1]`.)
+`resid_mix` is initialized at `[1.0, 0.0]` per channel, so at step 0 the model is **bit-identical to its tie-embedding baseline**. Any improvement is therefore attributable to the learnable mixing alone.
 
 ## Optimizer routing
 
@@ -24,13 +28,13 @@ Fix: this trainer sets `CONTROL_TENSOR_NAME_PATTERNS = "resid_mix,resid_mixes"` 
 
 ## Net parameter effect
 
-Negligible: adds `num_layers × 2 × dim` params (small: 9 × 2 × 512 = 9 216 params, +0.05 %).
+Negligible: adds `num_layers × 2 × dim` params (small: 9 × 2 × 512 = 9 216 params, +0.05 %). Weight tying partially offsets this since the lm_head is shared with the embedding.
 
 ## Training recipe
 
-Identical to baseline.
+Identical to the tie-embedding baseline.
 
 ## Files
 
 - `train_gpt.py`
-- `resid-mix.json` / `resid-mix-medium.json`
+- `resid-mix-tie-embedding.json` / `resid-mix-tie-embedding-medium.json`

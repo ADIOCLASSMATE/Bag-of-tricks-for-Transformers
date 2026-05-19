@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "trainer_path": "exp/tie-embed/train_gpt.py",
+  "trainer_path": "exp/dwide-mlp-only/train_gpt.py",
   "launcher": {
     "nproc_per_node": 4,
     "master_port_base": 29500
@@ -21,7 +21,6 @@
     "num_heads": 8,
     "num_kv_heads": 4,
     "mlp_mult": 2,
-    "tie_embeddings": 1,
     "tied_embed_lr": 0.05,
     "embed_lr": 0.6,
     "head_lr": 0.008,
@@ -32,12 +31,14 @@
     "muon_momentum_warmup_start": 0.85,
     "muon_momentum_warmup_steps": 800,
     "grad_clip_norm": 0.0,
+    "num_wide_mlp_layers": 0.2222,
     "wandb_entity": "Bag-of-Tricks",
     "wandb_group": "small-ablation"
   },
   "experiments": [
     {
-      "name": "tie-embed-small-fixed_time_20min",
+      "name": "dwide-mlp-only-small-fixed_time_20min",
+      "trainer_path": "exp/dwide-mlp-only/train_gpt.py",
       "control": {
         "mode": "fixed_compute",
         "target_wallclock_seconds": 1200,
@@ -45,7 +46,8 @@
       }
     },
     {
-      "name": "tie-embed-small-fixed_tokens_10b",
+      "name": "dwide-mlp-only-small-fixed_tokens_10b",
+      "trainer_path": "exp/dwide-mlp-only/train_gpt.py",
       "control": {
         "mode": "fixed_tokens",
         "target_train_tokens": 10000000000

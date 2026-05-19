@@ -1,17 +1,32 @@
 """
-trick: loop-share-mid — Unique first blocks + weight-shared middle blocks (looped) + unique remaining blocks
+Trick: resid-mix — learnable per-channel residual mixing with the original embedding,
+tested under tied embeddings (weight tying between input embedding and lm_head).
 
-Architecture is standard GPT (no baseline-sp1024 tricks) plus:
-  - Unique first N blocks + shared middle blocks repeated M times + unique remaining blocks
+This is the tie-embedding variant: both this model AND its baseline share the
+embedding matrix as the output projection. The comparison isolates whether resid-mix
+helps when weight tying is active.
 
-Architecture: GQA, RoPE, RMSNorm (no learnable weight), QK-Norm, untied embeddings,
-GELU MLP, standard residual, CastedLinear, restore_low_dim_params_to_fp32.
+Each Block takes an additional x0 (token embedding output) and mixes it with the
+current hidden state before sublayers:
+  mix = resid_mix  # shape [2, dim], init [1, 0]
+  x = mix[0] * x + mix[1] * x0
+This allows each layer to blend the current representation with the original input
+embedding. Initialized as [1, 0], so at step 0 behavior is identical to the
+tie-embedding baseline (pure single-variable architectural ablation).
 
-Training recipe (identical to baseline):
-  - Muon optimizer for 2D matrix params in transformer blocks (encoder + loop + decoder)
-  - AdamW for scalar/control params, token embedding, and lm_head with separate LRs
+The resid_mix tensor is 2D so it would otherwise be routed to Muon by the default
+optimizer split; we add it to CONTROL_TENSOR_NAME_PATTERNS so it goes to AdamW
+(scalar group) instead — Muon is for spectral updates on weight matrices, not for
+per-channel scaling vectors.
+
+Architecture: same as tie-embedding baseline (GQA, RoPE, RMSNorm, QK-Norm, tied
+embeddings, GELU MLP, standard residual) plus the resid_mix mixing.
+
+Training recipe (identical to tie-embedding baseline):
+  - Muon optimizer for 2D matrix params in transformer blocks
+  - AdamW for scalar/control params (incl. resid_mix) and token embedding (tied as lm_head)
   - Muon momentum warmup
-  - Weight decay: 0.0 on token embedding, Muon, and scalar params; 0.1 on lm_head
+  - Weight decay: 0.0 on token embedding, Muon, and scalar params
   - JIT warmup with state reset
 """
 
@@ -37,23 +52,47 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from trainlib.hyperparameters import Hyperparameters as _BaseHyperparameters, hyperparameters_to_dict
+# resid-mix uses non-empty CONTROL_TENSOR_NAME_PATTERNS default to keep
+# resid_mix params (1D/scalar-like) out of Muon and in Adam.
+os.environ.setdefault("CONTROL_TENSOR_NAME_PATTERNS", "resid_mix,resid_mixes")
+
+from trainlib.hyperparameters import Hyperparameters, hyperparameters_to_dict
 from trainlib.optimizer import CONTROL_TENSOR_NAME_PATTERNS, Muon
 from trainlib.validation import build_sentencepiece_luts, load_validation_tokens, eval_val
 from trainlib.dataloader import DistributedTokenLoader
-from trainlib.transformer import Block, CastedLinear, RMSNorm, restore_low_dim_params_to_fp32
-
-
-class Hyperparameters(_BaseHyperparameters):
-    # trick: loop-share-mid — fraction of unique first + shared middle + unique remaining
-    num_unique_encoder = float(os.environ.get("NUM_UNIQUE_ENCODER", "0.1111"))
-    num_loop_layers = float(os.environ.get("NUM_LOOP_LAYERS", "0.3333"))
-    num_loop_repeats = int(os.environ.get("NUM_LOOP_REPEATS", "3"))
+from trainlib.transformer import (
+    RMSNorm, CastedLinear, Rotary, apply_rotary_emb,
+    CausalSelfAttention, MLP, restore_low_dim_params_to_fp32,
+)
 
 
 # -----------------------------
-# TRANSFORMER MODULES (custom GPT for loop-share-mid)
+# TRANSFORMER MODULES (custom Block + GPT for resid_mix)
 # -----------------------------
+
+class Block(nn.Module):
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int,
+        num_kv_heads: int,
+        mlp_mult: int,
+        rope_base: float,
+    ):
+        super().__init__()
+        self.attn_norm = RMSNorm()
+        self.mlp_norm = RMSNorm()
+        self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base)
+        self.mlp = MLP(dim, mlp_mult)
+        self.resid_mix = nn.Parameter(torch.stack((torch.ones(dim), torch.zeros(dim))).float())  # trick: resid-mix
+
+    def forward(self, x: Tensor, x0: Tensor) -> Tensor:  # trick: resid-mix — takes x0
+        mix = self.resid_mix.to(dtype=x.dtype)  # trick: resid-mix
+        x = mix[0][None, None, :] * x + mix[1][None, None, :] * x0  # trick: resid-mix
+        x = x + self.attn(self.attn_norm(x))
+        x = x + self.mlp(self.mlp_norm(x))
+        return x
+
 
 class GPT(nn.Module):
     def __init__(
@@ -66,23 +105,11 @@ class GPT(nn.Module):
         mlp_mult: int,
         tie_embeddings: bool,
         rope_base: float,
-        num_unique_encoder: float,
-        num_loop_layers: float,
-        num_loop_repeats: int,
     ):
         super().__init__()
         self.tie_embeddings = tie_embeddings
-        # fractions → absolute counts
-        if 0 < num_unique_encoder <= 1:
-            num_unique_encoder = max(1, round(num_unique_encoder * num_layers))
-        if 0 < num_loop_layers <= 1:
-            num_loop_layers = max(1, round(num_loop_layers * num_layers))
-        self.num_unique_encoder = num_unique_encoder
-        self.num_loop_layers = num_loop_layers
-        self.num_loop_repeats = num_loop_repeats
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
-        # trick: loop-share-mid — unique first blocks + shared middle + unique remaining
-        self.encoder_blocks = nn.ModuleList(
+        self.blocks = nn.ModuleList(
             [
                 Block(
                     model_dim,
@@ -91,33 +118,7 @@ class GPT(nn.Module):
                     mlp_mult,
                     rope_base,
                 )
-                for _ in range(num_unique_encoder)
-            ]
-        )
-        self.loop_blocks = nn.ModuleList(
-            [
-                Block(
-                    model_dim,
-                    num_heads,
-                    num_kv_heads,
-                    mlp_mult,
-                    rope_base,
-                )
-                for _ in range(num_loop_layers)
-            ]
-        )
-        num_decoder = num_layers - num_unique_encoder - num_loop_layers
-        self.num_decoder_layers = num_decoder
-        self.decoder_blocks = nn.ModuleList(
-            [
-                Block(
-                    model_dim,
-                    num_heads,
-                    num_kv_heads,
-                    mlp_mult,
-                    rope_base,
-                )
-                for _ in range(num_decoder)
+                for _ in range(num_layers)
             ]
         )
         self.final_norm = RMSNorm()
@@ -146,16 +147,9 @@ class GPT(nn.Module):
 
     def forward(self, input_ids: Tensor, target_ids: Tensor) -> Tensor:
         x = self.tok_emb(input_ids)
-        # trick: loop-share-mid — unique first blocks
-        for block in self.encoder_blocks:
-            x = block(x)
-        # trick: loop-share-mid — looped middle block
-        for rep in range(self.num_loop_repeats):
-            for block in self.loop_blocks:
-                x = block(x)
-        # trick: loop-share-mid — unique remaining blocks
-        for block in self.decoder_blocks:
-            x = block(x)
+        x0 = x  # trick: resid-mix — save embedding for mixing
+        for block in self.blocks:
+            x = block(x, x0)  # trick: resid-mix
         x = self.final_norm(x).reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
         if self.tie_embeddings:
@@ -288,9 +282,6 @@ def main() -> None:
         mlp_mult=args.mlp_mult,
         tie_embeddings=args.tie_embeddings,
         rope_base=args.rope_base,
-        num_unique_encoder=args.num_unique_encoder,
-        num_loop_layers=args.num_loop_layers,
-        num_loop_repeats=args.num_loop_repeats,
     ).to(device).bfloat16()
     for module in base_model.modules():
         if isinstance(module, CastedLinear):
@@ -304,8 +295,7 @@ def main() -> None:
     # - untied lm_head (Adam) uses HEAD_LR
     # - matrix params in transformer blocks use MATRIX_LR via Muon
     # - vectors/scalars use SCALAR_LR via Adam
-    # trick: loop-share-mid — collect params from encoder + loop + decoder blocks
-    block_named_params = list(base_model.encoder_blocks.named_parameters()) + list(base_model.loop_blocks.named_parameters()) + list(base_model.decoder_blocks.named_parameters())
+    block_named_params = list(base_model.blocks.named_parameters())
     matrix_params = [
         p
         for name, p in block_named_params
@@ -365,7 +355,6 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
-    log0(f"trick:loop-share-mid encoder:{args.num_unique_encoder} loop_layers:{args.num_loop_layers} loop_repeats:{args.num_loop_repeats} decoder:{base_model.num_decoder_layers}")
 
     if master_process and args.enable_wandb and args.wandb_mode != "disabled":
         try:

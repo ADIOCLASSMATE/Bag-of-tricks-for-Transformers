@@ -38,7 +38,7 @@
   },
   "experiments": [
     {
-      "name": "loop-share-first-fixed_time_20min",
+      "name": "loop-share-first-small-fixed_time_20min",
       "trainer_path": "exp/loop-share-first/train_gpt.py",
       "control": {
         "mode": "fixed_compute",
@@ -47,7 +47,7 @@
       }
     },
     {
-      "name": "loop-share-first-fixed_tokens_10b",
+      "name": "loop-share-first-small-fixed_tokens_10b",
       "trainer_path": "exp/loop-share-first/train_gpt.py",
       "control": {
         "mode": "fixed_tokens",
