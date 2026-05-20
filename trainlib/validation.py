@@ -42,6 +42,20 @@ def build_sentencepiece_luts(
     )
 
 
+def build_gpt2_luts(
+    enc, vocab_size: int, device: torch.device
+) -> tuple[Tensor, Tensor, Tensor]:
+    table_size = max(enc.n_vocab, vocab_size)
+    base_bytes_np = np.zeros((table_size,), dtype=np.int16)
+    for token_id in range(enc.n_vocab):
+        base_bytes_np[token_id] = len(enc.decode_single_token_bytes(token_id))
+    return (
+        torch.tensor(base_bytes_np, dtype=torch.int16, device=device),
+        torch.zeros((table_size,), dtype=torch.bool, device=device),
+        torch.zeros((table_size,), dtype=torch.bool, device=device),
+    )
+
+
 def load_validation_tokens(pattern: str, seq_len: int) -> Tensor:
     files = [Path(p) for p in sorted(glob.glob(pattern))]
     if not files:

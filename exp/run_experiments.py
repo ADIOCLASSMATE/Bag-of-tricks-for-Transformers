@@ -15,6 +15,7 @@ from typing import Any
 ENV_KEY_MAP = {
     "data_path": "DATA_PATH",
     "tokenizer_path": "TOKENIZER_PATH",
+    "tokenizer_type": "TOKENIZER_TYPE",
     "vocab_size": "VOCAB_SIZE",
     "seed": "SEED",
     "val_batch_size": "VAL_BATCH_SIZE",

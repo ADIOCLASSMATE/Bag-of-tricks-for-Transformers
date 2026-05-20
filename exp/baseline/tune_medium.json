@@ -1,0 +1,350 @@
+{
+  "version": 1,
+  "trainer_path": "exp/baseline/train_gpt.py",
+  "launcher": {
+    "nproc_per_node": 4,
+    "master_port_base": 29500
+  },
+  "defaults": {
+    "data_path": "./data/datasets/fineweb-edu_100BT_gpt2",
+    "tokenizer_path": "gpt2",
+    "vocab_size": 50257,
+    "train_batch_tokens": 524288,
+    "train_seq_len": 1024,
+    "grad_accum_steps": 2,
+    "warmup_steps": 50,
+    "enable_wandb": 1,
+    "wandb_mode": "offline",
+    "wandb_project": "bag-of-tricks-for-transformers",
+    "wandb_entity": "Bag-of-Tricks",
+    "wandb_group": "tune-schedule-medium",
+    "num_layers": 18,
+    "model_dim": 1024,
+    "num_heads": 16,
+    "num_kv_heads": 8,
+    "mlp_mult": 2,
+    "tied_embed_lr": 0.05,
+    "embed_lr": 0.6,
+    "head_lr": 0.008,
+    "matrix_lr": 0.04,
+    "scalar_lr": 0.04,
+    "muon_momentum": 0.95,
+    "muon_backend_steps": 5,
+    "grad_clip_norm": 0.0,
+    "tokenizer_type": "gpt2"
+  },
+  "experiments": [
+    {
+      "name": "tune-medium-wd5pct-mw3pct-mus08",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 1120,
+        "muon_momentum_warmup_steps": 672,
+        "muon_momentum_warmup_start": 0.8
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd5pct-mw3pct-mus085",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 1120,
+        "muon_momentum_warmup_steps": 672,
+        "muon_momentum_warmup_start": 0.85
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd5pct-mw5pct-mus08",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 1120,
+        "muon_momentum_warmup_steps": 1120,
+        "muon_momentum_warmup_start": 0.8
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd5pct-mw5pct-mus085",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 1120,
+        "muon_momentum_warmup_steps": 1120,
+        "muon_momentum_warmup_start": 0.85
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd5pct-mw8pct-mus08",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 1120,
+        "muon_momentum_warmup_steps": 1793,
+        "muon_momentum_warmup_start": 0.8
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd5pct-mw8pct-mus085",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 1120,
+        "muon_momentum_warmup_steps": 1793,
+        "muon_momentum_warmup_start": 0.85
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd8pct-mw3pct-mus08",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 1793,
+        "muon_momentum_warmup_steps": 672,
+        "muon_momentum_warmup_start": 0.8
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd8pct-mw3pct-mus085",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 1793,
+        "muon_momentum_warmup_steps": 672,
+        "muon_momentum_warmup_start": 0.85
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd8pct-mw5pct-mus08",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 1793,
+        "muon_momentum_warmup_steps": 1120,
+        "muon_momentum_warmup_start": 0.8
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd8pct-mw5pct-mus085",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 1793,
+        "muon_momentum_warmup_steps": 1120,
+        "muon_momentum_warmup_start": 0.85
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd8pct-mw8pct-mus08",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 1793,
+        "muon_momentum_warmup_steps": 1793,
+        "muon_momentum_warmup_start": 0.8
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd8pct-mw8pct-mus085",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 1793,
+        "muon_momentum_warmup_steps": 1793,
+        "muon_momentum_warmup_start": 0.85
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd10pct-mw3pct-mus08",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 2241,
+        "muon_momentum_warmup_steps": 672,
+        "muon_momentum_warmup_start": 0.8
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd10pct-mw3pct-mus085",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 2241,
+        "muon_momentum_warmup_steps": 672,
+        "muon_momentum_warmup_start": 0.85
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd10pct-mw5pct-mus08",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 2241,
+        "muon_momentum_warmup_steps": 1120,
+        "muon_momentum_warmup_start": 0.8
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd10pct-mw5pct-mus085",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 2241,
+        "muon_momentum_warmup_steps": 1120,
+        "muon_momentum_warmup_start": 0.85
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd10pct-mw8pct-mus08",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 2241,
+        "muon_momentum_warmup_steps": 1793,
+        "muon_momentum_warmup_start": 0.8
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd10pct-mw8pct-mus085",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 2241,
+        "muon_momentum_warmup_steps": 1793,
+        "muon_momentum_warmup_start": 0.85
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd15pct-mw3pct-mus08",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 3362,
+        "muon_momentum_warmup_steps": 672,
+        "muon_momentum_warmup_start": 0.8
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd15pct-mw3pct-mus085",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 3362,
+        "muon_momentum_warmup_steps": 672,
+        "muon_momentum_warmup_start": 0.85
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd15pct-mw5pct-mus08",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 3362,
+        "muon_momentum_warmup_steps": 1120,
+        "muon_momentum_warmup_start": 0.8
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd15pct-mw5pct-mus085",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 3362,
+        "muon_momentum_warmup_steps": 1120,
+        "muon_momentum_warmup_start": 0.85
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd15pct-mw8pct-mus08",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 3362,
+        "muon_momentum_warmup_steps": 1793,
+        "muon_momentum_warmup_start": 0.8
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    },
+    {
+      "name": "tune-medium-wd15pct-mw8pct-mus085",
+      "trainer_path": "exp/baseline/train_gpt.py",
+      "overrides": {
+        "warmdown_iters": 3362,
+        "muon_momentum_warmup_steps": 1793,
+        "muon_momentum_warmup_start": 0.85
+      },
+      "control": {
+        "mode": "fixed_tokens",
+        "target_train_tokens": 11752345600
+      }
+    }
+  ]
+}

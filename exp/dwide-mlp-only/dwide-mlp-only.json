@@ -6,13 +6,13 @@
     "master_port_base": 29500
   },
   "defaults": {
-    "data_path": "./data/datasets/fineweb10B_sp1024",
-    "tokenizer_path": "./data/tokenizers/fineweb_1024_bpe.model",
-    "vocab_size": 1024,
+    "data_path": "./data/datasets/fineweb-edu_100BT_gpt2",
+    "tokenizer_path": "gpt2",
+    "vocab_size": 50257,
     "train_batch_tokens": 524288,
     "train_seq_len": 1024,
     "warmup_steps": 50,
-    "warmdown_iters": 1500,
+    "warmdown_iters": 972,
     "enable_wandb": 1,
     "wandb_mode": "offline",
     "wandb_project": "bag-of-tricks-for-transformers",
@@ -28,29 +28,21 @@
     "scalar_lr": 0.04,
     "muon_momentum": 0.95,
     "muon_backend_steps": 5,
-    "muon_momentum_warmup_start": 0.85,
-    "muon_momentum_warmup_steps": 800,
+    "muon_momentum_warmup_start": 0.8,
+    "muon_momentum_warmup_steps": 324,
     "grad_clip_norm": 0.0,
     "num_wide_mlp_layers": 0.2222,
     "wandb_entity": "Bag-of-Tricks",
-    "wandb_group": "small-ablation"
+    "wandb_group": "small-ablation",
+    "tokenizer_type": "gpt2"
   },
   "experiments": [
     {
-      "name": "dwide-mlp-only-small-fixed_time_20min",
-      "trainer_path": "exp/dwide-mlp-only/train_gpt.py",
-      "control": {
-        "mode": "fixed_compute",
-        "target_wallclock_seconds": 1200,
-        "iterations_cap": 1000000
-      }
-    },
-    {
-      "name": "dwide-mlp-only-small-fixed_tokens_10b",
+      "name": "dwide-mlp-only-small-fixed_tokens_3p4b",
       "trainer_path": "exp/dwide-mlp-only/train_gpt.py",
       "control": {
         "mode": "fixed_tokens",
-        "target_train_tokens": 10000000000
+        "target_train_tokens": 3400000000
       }
     }
   ]

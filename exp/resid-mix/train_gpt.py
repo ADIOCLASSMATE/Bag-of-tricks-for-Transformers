@@ -41,6 +41,7 @@ from pathlib import Path
 
 import numpy as np
 import sentencepiece as spm
+import tiktoken
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -53,7 +54,7 @@ os.environ.setdefault("CONTROL_TENSOR_NAME_PATTERNS", "resid_mix,resid_mixes")
 
 from trainlib.hyperparameters import Hyperparameters, hyperparameters_to_dict
 from trainlib.optimizer import CONTROL_TENSOR_NAME_PATTERNS, Muon
-from trainlib.validation import build_sentencepiece_luts, load_validation_tokens, eval_val
+from trainlib.validation import build_sentencepiece_luts, build_gpt2_luts, load_validation_tokens, eval_val
 from trainlib.dataloader import DistributedTokenLoader
 from trainlib.transformer import (
     RMSNorm, CastedLinear, Rotary, apply_rotary_emb,
@@ -247,20 +248,33 @@ def main() -> None:
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
-    if not args.tokenizer_path.endswith(".model"):
-        raise ValueError(f"Script only setup for SentencePiece .model file: {args.tokenizer_path}")
-    sp = spm.SentencePieceProcessor(model_file=args.tokenizer_path)
-    if int(sp.vocab_size()) != args.vocab_size:
+    if args.tokenizer_type == "gpt2":
+        enc = tiktoken.get_encoding("gpt2")
+        if enc.n_vocab != args.vocab_size:
+            raise ValueError(
+                f"VOCAB_SIZE={args.vocab_size} does not match GPT-2 vocab_size={enc.n_vocab}"
+            )
+        base_bytes_lut, has_leading_space_lut, is_boundary_token_lut = build_gpt2_luts(
+            enc, args.vocab_size, device
+        )
+    elif args.tokenizer_path.endswith(".model"):
+        sp = spm.SentencePieceProcessor(model_file=args.tokenizer_path)
+        if int(sp.vocab_size()) != args.vocab_size:
+            raise ValueError(
+                f"VOCAB_SIZE={args.vocab_size} does not match tokenizer vocab_size={int(sp.vocab_size())}"
+            )
+        base_bytes_lut, has_leading_space_lut, is_boundary_token_lut = build_sentencepiece_luts(
+            sp, args.vocab_size, device
+        )
+    else:
         raise ValueError(
-            f"VOCAB_SIZE={args.vocab_size} does not match tokenizer vocab_size={int(sp.vocab_size())}"
+            f"Unknown tokenizer: tokenizer_type={args.tokenizer_type}, "
+            f"tokenizer_path={args.tokenizer_path}"
         )
     dataset_dir = Path(args.data_path).resolve()
     actual_train_files = len(list(dataset_dir.glob("fineweb_train_*.bin")))
     val_tokens = load_validation_tokens(args.val_files, args.train_seq_len)
-    base_bytes_lut, has_leading_space_lut, is_boundary_token_lut = build_sentencepiece_luts(
-        sp, args.vocab_size, device
-    )
-    log0(f"val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path={args.tokenizer_path}")
+    log0(f"val_bpb:enabled tokenizer_kind={args.tokenizer_type} tokenizer_path={args.tokenizer_path}")
     log0(f"train_loader:dataset:{dataset_dir.name} train_shards:{actual_train_files}")
     log0(f"val_loader:shards pattern={args.val_files} tokens:{val_tokens.numel() - 1}")
 

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "bag-of-tricks-for-transformers"
 version = "0.1.0"
-description = "Training and data preparation scripts for the parameter-golf project."
+description = "bag-of-tricks-for-transformers"
 license = { file = "LICENSE" }
 requires-python = ">=3.12,<3.13"
 dependencies = [

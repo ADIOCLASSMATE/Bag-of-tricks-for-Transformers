@@ -6,13 +6,13 @@
     "master_port_base": 29500
   },
   "defaults": {
-    "data_path": "./data/datasets/fineweb10B_sp1024",
-    "tokenizer_path": "./data/tokenizers/fineweb_1024_bpe.model",
-    "vocab_size": 1024,
+    "data_path": "./data/datasets/fineweb-edu_100BT_gpt2",
+    "tokenizer_path": "gpt2",
+    "vocab_size": 50257,
     "train_batch_tokens": 524288,
     "train_seq_len": 1024,
     "warmup_steps": 50,
-    "warmdown_iters": 800,
+    "warmdown_iters": 2861,
     "enable_wandb": 1,
     "wandb_mode": "offline",
     "wandb_project": "bag-of-tricks-for-transformers",
@@ -28,23 +28,15 @@
     "scalar_lr": 0.04,
     "muon_momentum": 0.95,
     "muon_backend_steps": 5,
-    "muon_momentum_warmup_start": 0.85,
-    "muon_momentum_warmup_steps": 800,
+    "muon_momentum_warmup_start": 0.8,
+    "muon_momentum_warmup_steps": 953,
     "grad_clip_norm": 0.0,
     "grad_accum_steps": 2,
     "wandb_entity": "Bag-of-Tricks",
-    "wandb_group": "medium-ablation"
+    "wandb_group": "medium-ablation",
+    "tokenizer_type": "gpt2"
   },
   "experiments": [
-    {
-      "name": "swiglu-medium-fixed_time_20min",
-      "trainer_path": "exp/swiglu/train_gpt.py",
-      "control": {
-        "mode": "fixed_compute",
-        "target_wallclock_seconds": 1200,
-        "iterations_cap": 1000000
-      }
-    },
     {
       "name": "swiglu-medium-fixed_tokens_10b",
       "trainer_path": "exp/swiglu/train_gpt.py",

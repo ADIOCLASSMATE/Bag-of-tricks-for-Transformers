@@ -9,10 +9,11 @@ from pathlib import Path
 
 class Hyperparameters:
     # Data paths
-    data_path = os.environ.get("DATA_PATH", "./data/datasets/fineweb10B_sp1024")
+    data_path = os.environ.get("DATA_PATH", "./data/datasets/fineweb-edu_100BT_gpt2")
     train_files = os.path.join(data_path, "fineweb_train_*.bin")
     val_files = os.environ.get("VAL_FILES", os.path.join(data_path, "fineweb_val_*.bin"))
-    tokenizer_path = os.environ.get("TOKENIZER_PATH", "./data/tokenizers/fineweb_1024_bpe.model")
+    tokenizer_path = os.environ.get("TOKENIZER_PATH", "gpt2")
+    tokenizer_type = os.environ.get("TOKENIZER_TYPE", "gpt2")
     run_id = os.environ.get("RUN_ID", str(uuid.uuid4()))
     output_dir = os.environ.get("OUTPUT_DIR", str(Path(__file__).parent / "logs"))
     experiment_name = os.environ.get("EXPERIMENT_NAME", run_id)
@@ -35,7 +36,7 @@ class Hyperparameters:
     max_wallclock_seconds = float(os.environ.get("MAX_WALLCLOCK_SECONDS", 600.0))
 
     # Model shape
-    vocab_size = int(os.environ.get("VOCAB_SIZE", 1024))
+    vocab_size = int(os.environ.get("VOCAB_SIZE", 50257))
     num_layers = int(os.environ.get("NUM_LAYERS", 9))
     num_kv_heads = int(os.environ.get("NUM_KV_HEADS", 4))
     model_dim = int(os.environ.get("MODEL_DIM", 512))
